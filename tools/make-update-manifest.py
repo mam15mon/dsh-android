@@ -27,8 +27,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-PACKAGE = "io.github.jackwener.dsh"
-DEFAULT_REPO = "jackwener/DSH-Android"
+_CLIENT = json.loads((ROOT / "client.json").read_text(encoding="utf-8"))
+PACKAGE = _CLIENT["package"]
+DEFAULT_REPO = _CLIENT["repository"]
 
 
 def die(msg):

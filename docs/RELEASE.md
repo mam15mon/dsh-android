@@ -2,7 +2,20 @@
 
 DSH-Android 只通过 GitHub Releases 分发。App 内更新（`core/update/`）读取每个版本附带的 `update.json`，所以每次发布除了 APK，还要生成并上传这个文件，再把同一份内容提交到仓库的 `update/latest.json`。
 
-## 步骤
+## 用 GitHub Actions 发布（推荐）
+
+1. 在 `client.json` 中更新 `versionName` 并递增 `versionCode`，提交并推送到 main，等这次 push 的构建通过。
+2. 触发发布：在 Actions 的 **Build DSH Android** 里点 **Run workflow**，`release_notes` 填写更新说明；或者运行：
+
+   ```bash
+   gh workflow run regression.yml --ref main -f release_notes="$(cat notes-zh.md)"
+   ```
+
+   `release_notes` 留空只构建不发布。工作流会用仓库密钥签名 APK、生成 `update.json`，再创建 tag `v<versionName>` 和正式 Release。
+3. 已有 Release 时，工作流会核对新 APK 的签名证书与上一版 `update.json` 一致，且 `versionCode` 更大；首个 Release 跳过这两项检查。包名和仓库从 `client.json` 读取。
+4. 发布后按下文第 8 步验证。
+
+## 手动发布步骤
 
 1. **改版本号**。在 `client.json` 中更新 `versionName` 并递增 `versionCode`。
 2. **构建正式签名 APK**。设置 `DSH_ANDROID_KEYSTORE` 和 `DSH_ANDROID_STORE_PASSWORD`，然后从仓库根目录执行：
