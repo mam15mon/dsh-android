@@ -54,11 +54,18 @@ class FileTools @Inject constructor(@ApplicationContext private val context: Con
     private class NeedsShizuku(message: String) : Exception(message)
 
     private fun resolve(path: String): File {
-        val f = (if (path.startsWith("/")) File(path) else File(root, path)).canonicalFile
+        val f = (if (path.startsWith("/")) File(PrivateStorage.emulated(File(path).normalize().path)) else File(root, path)).canonicalFile
         val allowed = listOf(root.canonicalPath, "/storage", "/sdcard")
         if (allowed.none { f.path.startsWith(it) })
             throw InvalidArgsException("Path outside shared storage is not accessible: ${f.path}")
         return f
+    }
+
+    /** The storage root, anything above it (/storage, /storage/emulated) and volume roots (SD cards): never deleted or moved away. */
+    private fun volumeRoot(f: File): Boolean {
+        val path = f.canonicalPath
+        val rootPath = root.canonicalPath
+        return path == rootPath || rootPath.startsWith("$path/") || f.parentFile?.canonicalPath == "/storage" || path == "/storage"
     }
 
     /**
@@ -388,6 +395,7 @@ class FileTools @Inject constructor(@ApplicationContext private val context: Con
                         val from = resolve(o.reqStr("from"))
                         var to = resolve(rawTo)
                         if (!copy && PrivateStorage.isScopeRoot(from.path)) return@runCatching "refused: ${from.path} (moving all of Android/data or Android/obb)"
+                        if (!copy && volumeRoot(from)) return@runCatching "refused: ${from.path} (moving a storage or volume root)"
                         // Either end in Android/data|obb: the shell user does the whole item (it reaches both).
                         val fromShell = viaShell(from)
                         if (fromShell || viaShell(to))
@@ -419,16 +427,14 @@ class FileTools @Inject constructor(@ApplicationContext private val context: Con
             override suspend fun invoke(args: JsonObject, call: CallContext) = io {
                 val paths = args.strs("paths")
                 if (paths.isEmpty()) throw InvalidArgsException("no paths")
-                val rootPath = root.canonicalPath
                 ToolResult.text(paths.map { p ->
                     val f = resolve(p)
                     val path = f.canonicalPath
                     if (PrivateStorage.isScopeRoot(path)) return@map "refused: ${f.path} (all of Android/data or Android/obb)"
+                    // Before the shell branch: in Root mode every path goes there, and uid 0 refuses nothing.
+                    if (volumeRoot(f)) return@map "refused: ${f.path} (storage or volume root)"
                     if (viaShell(f)) return@map shell().fsDelete(f.path) + " (via ${shizuku.label})"
                     when {
-                        // The storage root, anything above it (/storage, /storage/emulated) and volume roots (SD cards).
-                        path == rootPath || rootPath.startsWith("$path/") || f.parentFile?.canonicalPath == "/storage" || path == "/storage" ->
-                            "refused: ${f.path} (storage or volume root)"
                         !f.exists() -> "not found ${f.path}"
                         f.deleteRecursively() -> "deleted ${f.path}"
                         else -> "partially deleted ${f.path}: ${f.walkTopDown().count()} item(s) could not be removed"

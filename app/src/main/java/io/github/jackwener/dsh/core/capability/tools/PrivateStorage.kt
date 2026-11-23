@@ -13,6 +13,16 @@ internal object PrivateStorage {
         RegexOption.IGNORE_CASE,
     )
 
+    private val RAW = Regex("^/data/media/(\\d+)(/.*)?$")
+
+    /**
+     * The emulated-storage spelling of a raw `/data/media/<user>` path, which Root project folders
+     * use (NativeRootActivity.canonical); other paths are returned unchanged. The storage guards
+     * (scope roots, volume roots) only know the emulated spelling.
+     */
+    fun emulated(path: String): String =
+        RAW.matchEntire(path)?.let { "/storage/emulated/${it.groupValues[1]}${it.groupValues[2]}" } ?: path
+
     /** [path] (canonical) is Android/data or Android/obb or inside them. */
     fun isPrivate(path: String): Boolean = DIR.matches(path.trimEnd('/').ifEmpty { "/" })
 

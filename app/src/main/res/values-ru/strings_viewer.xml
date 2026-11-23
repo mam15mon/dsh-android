@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="viewer_copy_content">Копировать всё</string>
+    <string name="viewer_open_with">Открыть в другом приложении</string>
+    <string name="viewer_preview">Просмотр</string>
+    <string name="viewer_source">Исходник</string>
+    <string name="viewer_kind_text">Текст</string>
+    <string name="viewer_lines">Строк: %1$d</string>
+    <string name="viewer_partial">Только первые %1$d КБ</string>
+    <string name="viewer_empty">Пустой файл</string>
+    <string name="viewer_binary_title">Нет предпросмотра</string>
+    <string name="viewer_binary">DSH пока не умеет показывать такие файлы. Открой его в другом приложении.</string>
+    <string name="viewer_failed_title">Не удалось открыть файл</string>
+    <string name="viewer_is_folder">Это папка, а не файл.</string>
+    <string name="viewer_not_found">Файла нет: возможно, его переместили или удалили.</string>
+    <string name="viewer_no_access">Файла нет, или у DSH нет доступа. Для общего хранилища нужен доступ ко всем файлам; для Android/data и проектов Root — Root или Shizuku.</string>
+    <string name="viewer_failed">Не удалось прочитать: %1$s</string>
+    <string name="viewer_too_large">Файлы больше 200 МБ нельзя передать другому приложению.</string>
+    <string name="viewer_no_app">Нет приложения, которое может открыть этот файл</string>
+    <string name="link_no_browser">Нет браузера, который может открыть ссылку</string>
+</resources>

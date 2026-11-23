@@ -1,9 +1,20 @@
 package io.github.jackwener.dsh.core.designsystem
 
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.UriHandler
+import io.github.jackwener.dsh.core.platform.Browser
+import io.github.jackwener.dsh.feature.viewer.FileLinks
+import io.github.jackwener.dsh.feature.viewer.FileViewerDialog
+import io.github.jackwener.dsh.feature.viewer.LinkTarget
+import io.github.jackwener.dsh.feature.viewer.LocalLinkBase
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -77,7 +88,29 @@ fun DshMarkdown(text: String, modifier: Modifier = Modifier, compact: Boolean = 
     val body = (if (compact) DshType.xs13 else DshType.body).copy(color = color)
     fun h(size: Int, line: Int, w: Int) = body.copy(fontSize = size.sp, lineHeight = line.sp, fontWeight = FontWeight(w))
     val code = DshType.mono12.copy(fontSize = 11.sp, lineHeight = 19.sp, color = c.labelPrimary)
-    Markdown(
+    val context = LocalContext.current
+    val linkBase = LocalLinkBase.current
+    var viewing by remember { mutableStateOf<String?>(null) }
+    // Links open here, not through Android's default handler: that one cannot open file paths, and
+    // from the quick panel a browser needs a new task.
+    val links = remember(context, linkBase) {
+        object : UriHandler {
+            override fun openUri(uri: String) {
+                when (val target = FileLinks.resolve(uri, linkBase ?: FileLinks.workspace(context))) {
+                    is LinkTarget.Web -> if (!Browser.openExternal(context, target.url)) Toast.makeText(context, R.string.link_no_browser, Toast.LENGTH_SHORT).show()
+                    is LinkTarget.External -> try {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(target.uri)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    } catch (e: ActivityNotFoundException) {
+                        Toast.makeText(context, R.string.viewer_no_app, Toast.LENGTH_SHORT).show()
+                    }
+                    is LinkTarget.Local -> viewing = target.path
+                    null -> {}
+                }
+            }
+        }
+    }
+    viewing?.let { FileViewerDialog(it) { viewing = null } }
+    CompositionLocalProvider(LocalUriHandler provides links) { Markdown(
         text,
         colors = markdownColor(text = color, codeBackground = c.codeBlock, inlineCodeBackground = c.inlineCode, dividerColor = c.borderL2, tableBackground = c.bgModule),
         typography = markdownTypography(
@@ -92,7 +125,7 @@ fun DshMarkdown(text: String, modifier: Modifier = Modifier, compact: Boolean = 
         ),
         padding = markdownPadding(block = if (compact) 2.dp else 6.dp, codeBlock = androidx.compose.foundation.layout.PaddingValues(14.dp, 10.dp)),
         modifier = modifier,
-    )
+    ) }
 }
 
 /** dsh CodeBlock / TerminalBlock: R16 card on the code-block fill with a banner and copy button. */

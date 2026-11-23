@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="viewer_copy_content">Copy all</string>
+    <string name="viewer_open_with">Open with another app</string>
+    <string name="viewer_preview">Preview</string>
+    <string name="viewer_source">Source</string>
+    <string name="viewer_kind_text">Text</string>
+    <string name="viewer_lines">%1$d lines</string>
+    <string name="viewer_partial">First %1$d KB only</string>
+    <string name="viewer_empty">Empty file</string>
+    <string name="viewer_binary_title">No preview</string>
+    <string name="viewer_binary">DSH cannot preview this kind of file yet. Open it with another app.</string>
+    <string name="viewer_failed_title">Cannot open this file</string>
+    <string name="viewer_is_folder">This is a folder, not a file.</string>
+    <string name="viewer_not_found">The file does not exist; it may have been moved or deleted.</string>
+    <string name="viewer_no_access">The file does not exist, or DSH cannot read it. Shared storage needs All files access; Android/data and Root projects need Root or Shizuku.</string>
+    <string name="viewer_failed">Cannot read: %1$s</string>
+    <string name="viewer_too_large">Files over 200 MB cannot be handed to another app.</string>
+    <string name="viewer_no_app">No app can open this file</string>
+    <string name="link_no_browser">No browser can open this link</string>
+</resources>

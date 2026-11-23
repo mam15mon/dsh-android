@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 回复里的文件链接与只读文件查看器（feature/viewer）。 -->
+<resources>
+    <string name="viewer_copy_content">复制全文</string>
+    <string name="viewer_open_with">用其他应用打开</string>
+    <string name="viewer_preview">预览</string>
+    <string name="viewer_source">源码</string>
+    <string name="viewer_kind_text">文本</string>
+    <string name="viewer_lines">%1$d 行</string>
+    <string name="viewer_partial">仅显示前 %1$d KB</string>
+    <string name="viewer_empty">空文件</string>
+    <string name="viewer_binary_title">无法预览</string>
+    <string name="viewer_binary">DSH 暂不支持预览这种文件，可以用其他应用打开。</string>
+    <string name="viewer_failed_title">打不开这个文件</string>
+    <string name="viewer_is_folder">这是一个文件夹，不是文件。</string>
+    <string name="viewer_not_found">文件不存在，可能已被移动或删除。</string>
+    <string name="viewer_no_access">文件不存在，或 DSH 没有读取权限。共享存储需要「所有文件访问权限」；Android/data 和 Root 项目需要开启 Root 或 Shizuku。</string>
+    <string name="viewer_failed">无法读取：%1$s</string>
+    <string name="viewer_too_large">文件超过 200 MB，无法交给其他应用打开。</string>
+    <string name="viewer_no_app">没有可以打开这个文件的应用</string>
+    <string name="link_no_browser">没有可以打开链接的浏览器</string>
+</resources>

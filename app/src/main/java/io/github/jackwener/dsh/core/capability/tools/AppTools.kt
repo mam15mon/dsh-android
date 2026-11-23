@@ -145,7 +145,7 @@ class AppTools @Inject constructor(
         }) {
             override suspend fun invoke(args: JsonObject, call: CallContext): ToolResult {
                 val root = Environment.getExternalStorageDirectory()
-                val files = args.strs("paths").map { p -> (if (p.startsWith("/")) File(p) else File(root, p)).canonicalFile }
+                val files = args.strs("paths").map { p -> (if (p.startsWith("/")) File(PrivateStorage.emulated(File(p).normalize().path)) else File(root, p)).canonicalFile }
                 files.firstOrNull { !it.isFile }?.let { throw InvalidArgsException("Not a file: ${it.path}") }
                 val uris = ArrayList(files.map { f ->
                     try { FileProvider.getUriForFile(context, "${context.packageName}.files", f) }

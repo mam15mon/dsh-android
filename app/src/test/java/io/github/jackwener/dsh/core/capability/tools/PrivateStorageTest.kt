@@ -33,6 +33,15 @@ class PrivateStorageTest {
         assertFalse(PrivateStorage.isScopeRoot("/storage/emulated/0/Download"))
     }
 
+    @Test fun rawRootPathsUseTheEmulatedSpelling() {
+        assertEquals("/storage/emulated/0/Android/data/com.x/a.txt", PrivateStorage.emulated("/data/media/0/Android/data/com.x/a.txt"))
+        assertEquals("/storage/emulated/10", PrivateStorage.emulated("/data/media/10"))
+        assertEquals("/data/media/obb/x", PrivateStorage.emulated("/data/media/obb/x"))
+        assertEquals("/data/media/0x/y", PrivateStorage.emulated("/data/media/0x/y"))
+        assertEquals("/sdcard/Download", PrivateStorage.emulated("/sdcard/Download"))
+        assertTrue(PrivateStorage.isScopeRoot(PrivateStorage.emulated("/data/media/0/Android/data")))
+    }
+
     @Test fun shizukuMessageNamesTheSetting() {
         val m = PrivateStorage.needsShizuku("Shizuku is installed but not running")
         assertTrue(m, m.contains("访问 Android/data 需要 Shizuku") && m.contains("Shizuku is installed but not running") && m.contains("Settings"))
