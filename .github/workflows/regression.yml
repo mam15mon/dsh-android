@@ -69,16 +69,25 @@ jobs:
           RELEASE_NOTES: ${{ inputs.release_notes }}
         run: |
           set -euo pipefail
-          gh release download --pattern update.json --output "$RUNNER_TEMP/previous-update.json"
-          previous_signer=$(jq -er '.signerSha256 | select(test("^[a-f0-9]{64}$"))' "$RUNNER_TEMP/previous-update.json")
-          previous_code=$(jq -er '.versionCode | numbers' "$RUNNER_TEMP/previous-update.json")
           version=$(jq -er '.versionName' client.json)
           directory=build/client
           printf '%s\n' "$RELEASE_NOTES" > "$directory/release-notes.md"
+          signer_args=()
+          release_count=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq 'length')
+          if [ "$release_count" -gt 0 ]; then
+            gh release download --pattern update.json --output "$RUNNER_TEMP/previous-update.json"
+            previous_signer=$(jq -er '.signerSha256 | select(test("^[a-f0-9]{64}$"))' "$RUNNER_TEMP/previous-update.json")
+            signer_args=(--expect-signer "$previous_signer")
+          else
+            echo "No earlier release: first release, skipping signer and versionCode checks"
+          fi
           python tools/make-update-manifest.py \
             "$directory/DSH-Android-${version}-arm64.apk" --repo "$GITHUB_REPOSITORY" \
-            --notes-zh "$directory/release-notes.md" --expect-signer "$previous_signer" -o "$directory/update.json"
-          jq -e --argjson previous "$previous_code" '.versionCode > $previous' "$directory/update.json"
+            --notes-zh "$directory/release-notes.md" "${signer_args[@]}" -o "$directory/update.json"
+          if [ "$release_count" -gt 0 ]; then
+            previous_code=$(jq -er '.versionCode | numbers' "$RUNNER_TEMP/previous-update.json")
+            jq -e --argjson previous "$previous_code" '.versionCode > $previous' "$directory/update.json"
+          fi
       - name: Upload client APK and checksum
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
@@ -109,8 +118,10 @@ jobs:
           apk="DSH-Android-${version}-arm64.apk"
           sha256sum -c "$apk.sha256"
           test "$(sha256sum "$apk" | cut -d ' ' -f 1)" = "$(jq -er '.apk.sha256' update.json)"
-          gh release download --pattern update.json --output "$RUNNER_TEMP/previous-update.json"
-          jq -e --argjson next "$code" '.versionCode < $next' "$RUNNER_TEMP/previous-update.json"
+          if [ "$(gh api "repos/$GH_REPO/releases" --jq 'length')" -gt 0 ]; then
+            gh release download --pattern update.json --output "$RUNNER_TEMP/previous-update.json"
+            jq -e --argjson next "$code" '.versionCode < $next' "$RUNNER_TEMP/previous-update.json"
+          fi
           tag="v$version"
           gh release create "$tag" "$apk" "$apk.sha256" update.json --target "$GITHUB_SHA" \
             --title "DSH 安卓 $tag" --notes-file release-notes.md --latest
