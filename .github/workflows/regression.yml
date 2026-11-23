@@ -3,7 +3,9 @@ name: Build DSH Android
 on:
   push:
     branches: [main]
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE', 'LICENSES/**', '.github/ISSUE_TEMPLATE/**']
   pull_request:
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE', 'LICENSES/**', '.github/ISSUE_TEMPLATE/**']
   workflow_dispatch:
     inputs:
       release_notes:
