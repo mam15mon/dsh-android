@@ -1,0 +1,22 @@
+--- a/@deepseek-ai/dsh-sdk-jsonrpc-server/lib/index.js
++++ b/@deepseek-ai/dsh-sdk-jsonrpc-server/lib/index.js
+@@ -377,6 +377,7 @@
+ 			if (!this.approvalRequests || !this.ownsAgent(request.agent)) return next();
+ 			const params = {
+ 				sessionId: request.agent.session.id,
++				rootSessionId: this.rootSessionIdOf(request.agent),
+ 				toolName: request.toolName,
+ 				...request.callId === void 0 ? {} : { callId: request.callId },
+ 				...request.reason === void 0 ? {} : { reason: request.reason }
+@@ -632,6 +633,11 @@
+ 			throw error;
+ 		}
+ 		return this.sessions.get(root.session.id)?.handle.agent === root;
++	}
++	// DSH-Android: approvals from descendants belong to the SDK root conversation.
++	rootSessionIdOf(agent) {
++		if (this.sessions.get(agent.session.id)?.handle.agent === agent) return String(agent.session.id);
++		return String(this.ctx.get("subagents").rootOf(agent).session.id);
+ 	}
+ 	assertLiveAgent(rec, sessionId) {
+ 		if (this.ctx.agents.get(rec.handle.agent.id) !== rec.handle.agent) throw new Error(`session agent was disposed outside the server: ${sessionId}`);

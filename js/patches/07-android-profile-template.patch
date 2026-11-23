@@ -1,0 +1,12 @@
+--- a/@deepseek-ai/dsh-official-bundles/lib/index.js
++++ b/@deepseek-ai/dsh-official-bundles/lib/index.js
+@@ -6,7 +6,8 @@
+ 	web: { bundles: ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"] },
+ 	headless: { bundles: ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-headless"] },
+ 	sdk: { bundles: ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-sdk-app"] },
+-	"sdk-minimal": { bundles: ["@deepseek-ai/dsh-sdk-minimal"] }
++	"sdk-minimal": { bundles: ["@deepseek-ai/dsh-sdk-minimal"] },
++	android: { bundles: ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-sdk-app", "@dsh-android/bundle-android"] }
+ };
+ /**
+ * Installation-owned bundle tuples that an earlier release wrote into a shipped profile; app-boot replaces an exact

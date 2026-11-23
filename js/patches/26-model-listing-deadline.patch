@@ -1,0 +1,20 @@
+--- a/@dsh-android/bundle-android/cordis.patch.yml
++++ b/@dsh-android/bundle-android/cordis.patch.yml
+@@ -48,15 +48,7 @@
+       name: '@dsh-android/plugin-extensions'
+ 
+-# rc.5's official DeepSeek routes follow the account's `/models` listing and wait up to
+-# 5 s for it on the first connect: a network round trip on every cold start. Wait 1 ms:
+-# the first connect uses the built-in catalog, the listing loads in the background and
+-# applies from then on.
+-- id: llm-deepseek-api-key
+-  config:
+-    modelsTimeoutMs: 1
+-- id: llm-deepseek-account
+-  config:
+-    modelsTimeoutMs: 1
++# Use DSH's normal 5 s model-listing request deadline. A 1 ms deadline cancels the
++# request itself; it does not keep fetching in the background.
+ 
+ # The skill catalog (a user message in every conversation with skills on) lists name + one line
+ # per skill; dsh allows 500 characters per description. 250 keeps the "use when …" part of

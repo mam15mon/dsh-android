@@ -1,0 +1,12 @@
+--- a/@dsh-android/bundle-android/cordis.patch.yml
++++ b/@dsh-android/bundle-android/cordis.patch.yml
+@@ -68,6 +68,9 @@
+ 
+ # ── rows a phone does not need ───────────────────────────────────────────────
+ # Mounted on demand by android-extensions instead (see above).
++# SDK uses the private JSON-RPC bridge, not the Web/Remote server.
++- id: typert-gateway
++  disabled: true
+ - id: plugin-manager
+   disabled: true
+ - id: tool-plugin-manager

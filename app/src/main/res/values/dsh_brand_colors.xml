@@ -1,0 +1,6 @@
+<resources>
+    <color name="dsh_icon_dark">#071D40</color>
+    <color name="dsh_icon_light">#E8F7F2</color>
+    <!-- 角色插画边缘的蓝，桌面图标底色 -->
+    <color name="dsh_character_icon_bg">#023870</color>
+</resources>

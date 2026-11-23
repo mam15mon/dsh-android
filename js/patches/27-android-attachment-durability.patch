@@ -1,0 +1,13 @@
+--- a/@deepseek-ai/dsh-attachment-local/lib/index.js
++++ b/@deepseek-ai/dsh-attachment-local/lib/index.js
+@@ -387,6 +387,10 @@
+ async function syncDirectory(path) {
+ 	/* v8 ignore next -- Windows cannot open directory handles; NTFS metadata journaling owns entry durability there. */
+ 	if (process.platform === "win32") return;
++	// Android creates these ancestors before the App sandbox. Root can open them,
++	// but fsync on the system root is unsupported; their durability is Android's.
++	// Keep syncing the App directory and every attachment directory below it.
++	if (process.platform === "android" && (path === "/" || path === "/data" || path === "/data/data" || /^\/data\/user(?:_de)?(?:\/\d+)?$/.test(path))) return;
+ 	/* v8 ignore start -- Windows cannot exercise directory fsync; POSIX behavior tests enforce this peer. */
+ 	let handle;
+ 	try {

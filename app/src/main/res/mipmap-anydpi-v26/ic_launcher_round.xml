@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  桌面图标：角色插画铺满整块前景（dsh_launcher_foreground 由 dsh_character_icon 去掉自带底板后放大生成），
+  底色取插画边缘的蓝，任何形状的桌面遮罩都不会露出一圈边框。
+  不放 monochrome：旧的单色层是手机终端标志，和角色图标对不上；没有它时主题图标模式显示彩色原图。
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/dsh_character_icon_bg" />
+    <foreground android:drawable="@drawable/dsh_launcher_foreground" />
+</adaptive-icon>

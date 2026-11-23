@@ -1,0 +1,9 @@
+gradlew text eol=lf
+gradlew.bat text eol=crlf
+*.sh text eol=lf
+*.patch text eol=lf
+js/** text=auto eol=lf
+app/src/main/assets/engine.sha256 text eol=lf
+app/src/main/assets/engine-version.txt text eol=lf
+app/src/main/assets/licenses/Node.js.txt whitespace=-space-before-tab
+app/src/main/assets/shizuku/LICENSE -text

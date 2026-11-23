@@ -1,0 +1,74 @@
+--- a/@dsh-android/plugin-account/index.js
++++ b/@dsh-android/plugin-account/index.js
+@@ -27,7 +27,6 @@
+ //   account.changed {view}  account.session-expired {}  account.signed-out {}
+ //   account.model-sign-in-required {}  account.callback {result}
+ import { APP_IDENTITY } from '@deepseek-ai/dsh-llm'
+-import { isRunningAccountTask } from '@deepseek-ai/dsh-deepseek-account'
+ import { createLoopbackServer } from './loopback.js'
+ 
+ export const name = 'android-account'
+@@ -109,7 +108,7 @@
+       return viewOf(await account().cancelSignIn(params.attemptId))
+     }],
+     ['account/sign-out', async params => viewOf(await account().signOut(clientMetadata(params?.client, locale())))],
+-    ['account/tasks/running', () => ({ running: (ctx.get('agents')?.list() ?? []).some(isRunningAccountTask) })],
++    ['account/tasks/running', () => ({ running: account().hasRunningAccountTasks() })],
+   ])
+   const extensions = { resolve: method => methods.get(method), methods: () => [...methods.keys()] }
+   ctx.provide('sdkExtensions', extensions)
+--- a/@dsh-android/plugin-guard/session-model.js
++++ b/@dsh-android/plugin-guard/session-model.js
+@@ -47,28 +47,17 @@
+  * @param options.install - dsh's `installModelSelection` (tests inject a fake); loaded from
+  *   `@deepseek-ai/dsh-agent` on first use otherwise.
+  */
+-export function setupSessionModel(ctx, { install } = {}) {
++export function setupSessionModel(ctx) {
+   /** root session id → selection the app sent. */
+   const selections = new Map()
+-  /** live root Agent → its installed mutable selection (`{ current, assembled }`). */
+-  const installed = new WeakMap()
+-  let installer = install
+-  const loadInstaller = async () => {
+-    installer ??= (await import('@deepseek-ai/dsh-agent')).installModelSelection
+-    return installer
+-  }
+-
+   const rootAgent = sessionId => {
+     try { return ctx.get('agents')?.get?.(sessionId) ?? ctx.get('agents')?.list?.().find(a => String(a.session?.id) === sessionId) } catch { return undefined }
+   }
+ 
++  // DSH 0.2.2 records model selection directly on Agent.model before step preparation.
+   const applyTo = async (agent, selection) => {
+-    const ref = installed.get(agent)
+-    if (ref !== undefined) { ref.current = selection; return }
+-    if (selection === undefined) return
+-    const next = { current: selection, assembled: undefined }
+-    ;(await loadInstaller())(agent.ctx, next)
+-    installed.set(agent, next)
++    const { provider, model, reasoningEffort } = agent.options
++    agent.model.select(selection ?? { provider, model, ...reasoningEffort === undefined ? {} : { reasoningEffort } })
+   }
+ 
+   const methods = new Map([
+--- a/@dsh-android/bundle-android/cordis.patch.yml
++++ b/@dsh-android/bundle-android/cordis.patch.yml
+@@ -52,7 +52,7 @@
+ # 5 s for it on the first connect: a network round trip on every cold start. Wait 1 ms:
+ # the first connect uses the built-in catalog, the listing loads in the background and
+ # applies from then on.
+-- id: llm-deepseek
++- id: llm-deepseek-api-key
+   config:
+     modelsTimeoutMs: 1
+ - id: llm-deepseek-account
+@@ -69,6 +69,8 @@
+ # ── rows a phone does not need ───────────────────────────────────────────────
+ # Mounted on demand by android-extensions instead (see above).
+ - id: plugin-manager
++  disabled: true
++- id: tool-plugin-manager
+   disabled: true
+ # Telemetry export is off on the phone (privacy; no feedback UI wired to it).
+ - id: session-telemetry-otel

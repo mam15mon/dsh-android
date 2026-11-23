@@ -1,0 +1,12 @@
+--- a/@deepseek-ai/dsh-util-ripgrep/lib/index.js
++++ b/@deepseek-ai/dsh-util-ripgrep/lib/index.js
+@@ -14,6 +14,9 @@
+ 		const executable = parse(process.execPath);
+ 		const executableSidecar = process.platform === "win32" ? join(executable.dir, `${executable.name}-rg.exe`) : `${process.execPath}-rg`;
+ 		if ("pkg" in process && existsSync(executableSidecar)) return executableSidecar;
++		// DSH-Android: use the explicitly provided executable, or Android files/bin/rg.
++		if (process.env.DSH_RG_PATH) return process.env.DSH_RG_PATH;
++		if (process.platform === "android") return "rg";
+ 		const dependency = (await import("@vscode/ripgrep")).rgPath;
+ 		return process.versions.electron === void 0 ? dependency : dependency.replace(/\.asar(?=[\\/])/u, ".asar.unpacked");
+ 	});

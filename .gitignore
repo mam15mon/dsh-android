@@ -1,0 +1,44 @@
+# Gradle / Android 构建产物
+.gradle/
+.kotlin/
+build/
+app/build/
+local.properties
+app/schemas/
+*.iml
+.idea/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Python 构建脚本缓存
+__pycache__/
+*.py[cod]
+
+# 打包产物
+*.apk
+*.aab
+!/app/src/main/assets/shizuku/shizuku.apk
+*.keystore
+*.jks
+.env
+secrets/
+node_modules/
+/toolchains/
+
+# 运行时随包生成的可执行与依赖（由打包脚本产出，不入库）
+/bin/
+/lib/
+
+# 47 MB 原生推理库，首次构建前用 python tools/fetch-sherpa.py 下载
+app/libs/*.aar
+
+# Pinned APK runtime archives prepared by tools/fetch-runtime.py
+/app/src/main/assets/dsh-runtime-arm64-*.part
+/app/src/main/assets/node-v24.13.0-linux-arm64.tgz
+/app/src/main/assets/python-arm64.tgz
+/app/src/main/assets/ubuntu-base-arm64.tgz
+/app/src/main/assets/uv-arm64.tgz
+
+# 下载的素材源文件，不参与构建
+/deepseek-animation-gif-download-*.mp4

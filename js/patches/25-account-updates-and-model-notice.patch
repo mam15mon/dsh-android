@@ -1,0 +1,35 @@
+--- a/@dsh-android/plugin-account/index.js
++++ b/@dsh-android/plugin-account/index.js
+@@ -120,7 +120,7 @@
+   ctx.effect(() => {
+     const lifetime = new AbortController()
+     ;(async () => {
+-      for await (const state of account().watch(lifetime.signal)) notify('account.changed', { view: viewOf(state) })
++      for await (const { state } of account().watch(lifetime.signal)) notify('account.changed', { view: viewOf(state) })
+     })().catch(error => { if (!lifetime.signal.aborted) log('warn', `account stream ended: ${error?.message ?? error}`) })
+     return () => lifetime.abort()
+   }, 'android-account: state stream')
+--- a/@dsh-android/plugin-guard/session-model.js
++++ b/@dsh-android/plugin-guard/session-model.js
+@@ -47,7 +47,8 @@
+  * @param options.install - dsh's `installModelSelection` (tests inject a fake); loaded from
+  *   `@deepseek-ai/dsh-agent` on first use otherwise.
+  */
+-export function setupSessionModel(ctx) {
++export function setupSessionModel(ctx, { installNotice } = {}) {
++  const noticeInstalled = new WeakSet()
+   /** root session id → selection the app sent. */
+   const selections = new Map()
+   const rootAgent = sessionId => {
+@@ -56,6 +57,11 @@
+ 
+   // DSH 0.2.2 records model selection directly on Agent.model before step preparation.
+   const applyTo = async (agent, selection) => {
++    if (!noticeInstalled.has(agent)) {
++      installNotice ??= (await import('@deepseek-ai/dsh-agent')).installModelSelection
++      installNotice(agent.ctx)
++      noticeInstalled.add(agent)
++    }
+     const { provider, model, reasoningEffort } = agent.options
+     agent.model.select(selection ?? { provider, model, ...reasoningEffort === undefined ? {} : { reasoningEffort } })
+   }
