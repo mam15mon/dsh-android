@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="set_command_rules">命令规则</string>
+    <string name="command_rules_custom">自定义规则</string>
+    <string name="command_rules_add">新增规则</string>
+    <string name="command_rules_edit">编辑规则</string>
+    <string name="command_rules_copy_name">%1$s（副本）</string>
+    <string name="command_rules_example">禁止 Git 强制推送</string>
+    <string name="command_rules_built_in_hint">点按内置规则可复制。停用后，只有这一条规则停止拦截。</string>
+    <string name="command_rules_delete_group">删除保护</string>
+    <string name="command_rules_disk_group">磁盘与设备</string>
+    <string name="command_rules_system_group">系统操作</string>
+    <string name="command_rules_script_group">脚本与进程</string>
+    <string name="command_rule_system_directory">删除系统目录内容</string>
+    <string name="command_rule_storage_root">递归删除受保护目录</string>
+    <string name="command_rule_find_delete">使用 find 删除受保护路径</string>
+    <string name="command_rule_device_redirect">重定向写入设备节点</string>
+    <string name="command_rule_device_copy">dd 写入设备节点</string>
+    <string name="command_rule_device_format">格式化块设备</string>
+    <string name="command_rule_disk_tool">分区或刷写工具</string>
+    <string name="command_rule_power">重启或关机</string>
+    <string name="command_rule_wipe">清除设备数据</string>
+    <string name="command_rule_setting_delete">删除系统设置</string>
+    <string name="command_rule_system_package">卸载系统包</string>
+    <string name="command_rule_fork_bomb">进程耗尽（Fork bomb）</string>
+    <string name="command_rule_encoded_payload">解码后直接执行</string>
+    <string name="command_rule_remote_payload">下载后直接执行</string>
+    <string name="command_rules_json_help">用 JSON 编辑规则。name 为名称，command 匹配程序名，argumentPrefix 按顺序匹配开头参数，anyArguments 匹配任一参数，pathUnder 匹配目录下的路径参数。baseRule 可引用内置规则，并与其他条件一起检查。</string>
+    <string name="command_rules_preview">试跑命令</string>
+    <string name="command_rules_preview_hint">使用引擎默认工作目录检查规则。编辑页会包含未保存的规则。试跑只检查规则。</string>
+    <string name="command_rules_check">检查命令</string>
+    <string name="command_rules_no_match">未命中命令规则。实际调用仍按会话权限处理。</string>
+    <string name="command_rules_match">命中 %1$s\n%2$s</string>
+    <string name="command_rules_error">无法处理命令规则（%1$s）</string>
+</resources>

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="set_command_rules">Command rules</string>
+    <string name="command_rules_custom">Custom rules</string>
+    <string name="command_rules_add">Add rule</string>
+    <string name="command_rules_edit">Edit rule</string>
+    <string name="command_rules_copy_name">%1$s (copy)</string>
+    <string name="command_rules_example">Block force pushes with Git</string>
+    <string name="command_rules_built_in_hint">Tap a built-in rule to copy it. Turning a rule off disables that rule alone.</string>
+    <string name="command_rules_delete_group">Protected deletion</string>
+    <string name="command_rules_disk_group">Disks and devices</string>
+    <string name="command_rules_system_group">System operations</string>
+    <string name="command_rules_script_group">Scripts and processes</string>
+    <string name="command_rule_system_directory">Delete system directory contents</string>
+    <string name="command_rule_storage_root">Recursively delete protected directories</string>
+    <string name="command_rule_find_delete">Delete protected paths with find</string>
+    <string name="command_rule_device_redirect">Redirect output to a device node</string>
+    <string name="command_rule_device_copy">Write to a device node with dd</string>
+    <string name="command_rule_device_format">Format a block device</string>
+    <string name="command_rule_disk_tool">Partition or flash tools</string>
+    <string name="command_rule_power">Restart or shut down</string>
+    <string name="command_rule_wipe">Erase device data</string>
+    <string name="command_rule_setting_delete">Delete system settings</string>
+    <string name="command_rule_system_package">Uninstall system packages</string>
+    <string name="command_rule_fork_bomb">Fork bomb</string>
+    <string name="command_rule_encoded_payload">Decode and execute directly</string>
+    <string name="command_rule_remote_payload">Download and execute directly</string>
+    <string name="command_rules_json_help">Edit the rule as JSON. name is its label, command matches the program, argumentPrefix matches the first arguments in order, anyArguments matches any listed argument, and pathUnder matches path arguments within a directory. baseRule can reference a built-in and is checked together with the other conditions.</string>
+    <string name="command_rules_preview">Try a command</string>
+    <string name="command_rules_preview_hint">Checks rules using the default engine working directory. The editor includes your unsaved rule. The command is never run.</string>
+    <string name="command_rules_check">Check command</string>
+    <string name="command_rules_no_match">No command rule matched. Session permissions still apply to actual calls.</string>
+    <string name="command_rules_match">Matched %1$s\n%2$s</string>
+    <string name="command_rules_error">Could not process command rules (%1$s)</string>
+</resources>

@@ -51,8 +51,8 @@ const root = join(AGENT, 'toolchains/tmp', `host-e2e-${Date.now()}`)
 const engineDir = process.env.E2E_ENGINE_DIR ? resolve(process.env.E2E_ENGINE_DIR) : join(root, 'engine')
 const logFile = join(root, 'e2e.log')
 const MODEL = process.env.E2E_MODEL ?? 'deepseek-flash'
-// E2E_PHASES=A,B,C,D,E,F,G,H selects phases (default all); E2E_ENGINE_DIR reuses an extracted tree.
-const PHASES = new Set((process.env.E2E_PHASES ?? 'A,B,C,D,E,F,G,H,X').split(','))
+// E2E_PHASES=A,B,C,D,E,F,G,H,P,X selects phases (default all); E2E_ENGINE_DIR reuses an extracted tree.
+const PHASES = new Set((process.env.E2E_PHASES ?? 'A,B,C,D,E,F,G,H,P,X').split(','))
 
 mkdirSync(root, { recursive: true })
 const t0 = Date.now()
@@ -242,6 +242,7 @@ if (!PHASES.has('B')) {
   const PNG_1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
   let listCalls = 0
   const bridge = rpcPeer(eng.child.stdio[3], eng.child.stdio[3], 'bridge', async (method, params) => {
+    if (method === 'command-policy/get') return {}
     bridgeLog.push({ method, params })
     detail(`[bridge] <- ${method} ${JSON.stringify(params).slice(0, 300)}`)
     if (method === 'capability/list') { listCalls += 1; return { tools } }
@@ -592,6 +593,7 @@ if (!PHASES.has('E')) {
   ]
   const invokes = []
   rpcPeer(eng.child.stdio[3], eng.child.stdio[3], 'bridge-e', async (method, params) => {
+    if (method === 'command-policy/get') return {}
     if (method === 'capability/list') return { tools }
     if (method === 'capability/invoke') {
       invokes.push(params)
@@ -799,6 +801,7 @@ if (!PHASES.has('G')) {
   ]
   const invokes = []
   rpcPeer(eng.child.stdio[3], eng.child.stdio[3], 'bridge-g', async (method, params) => {
+    if (method === 'command-policy/get') return {}
     if (method === 'capability/list') return { tools }
     if (method === 'capability/invoke') { invokes.push(params); return { ok: true, content: [{ type: 'text', text: 'Download/\n  notes.txt' }] } }
     throw new Error(`unexpected ${method}`)
@@ -915,6 +918,7 @@ if (!PHASES.has('H')) {
   const boot = async tag => {
     const eng = startEngine(env, true)
     rpcPeer(eng.child.stdio[3], eng.child.stdio[3], `bridge-h${tag}`, async (method, params) => {
+      if (method === 'command-policy/get') return {}
       if (method === 'capability/list') return { tools }
       if (method === 'capability/invoke') { invokes.push(params); return { ok: true, content: [{ type: 'text', text: `${params.tool} done: ${JSON.stringify(params.args)}` }] } }
       if (method === 'experience/turn') return {}
@@ -987,6 +991,39 @@ if (!PHASES.has('H')) {
     g1?.eng.child.kill('SIGKILL')
   }
   proxy.close()
+}
+
+// ── phase P: command-rule preview through the SDK and capability channels ───
+if (PHASES.has('P')) {
+  log('phase P: command rules')
+  const home = join(root, 'p-home')
+  mkdirSync(home, { recursive: true })
+  const env = baseEnv(join(root, 'p-dsh-home'), home)
+  env.DEEPSEEK_API_KEY = 'sk-not-used'
+  const eng = startEngine(env, true)
+  let policy = {}
+  rpcPeer(eng.child.stdio[3], eng.child.stdio[3], 'bridge-p', async (method) => {
+    if (method === 'capability/list') return { tools: [] }
+    if (method === 'command-policy/get') return policy
+    throw new Error(`unexpected bridge method ${method}`)
+  })
+  const sdk = rpcPeer(eng.child.stdout, eng.child.stdin, 'sdk-p', () => ({ outcome: 'rejected' }))
+  try {
+    await withTimeout(sdk.request('initialize', { cwd: home, provider: 'deepseek-official', model: MODEL }), 60_000, 'initialize P')
+    const preview = (command, draft) => withTimeout(sdk.request('android/command-policy/check', { command, draft }), 5_000, 'preview P')
+    const command = 'git push --force'
+    const draft = { id: 'custom-draft', spec: { name: 'Force push', command: 'git', argumentPrefix: ['push'], anyArguments: ['--force'] } }
+    check('P: built-in rules are enabled by default', (await preview('reboot')).verdict?.rule === 'power')
+    check('P: preview checks an unsaved rule', (await preview(command, draft)).verdict?.rule === draft.id)
+    check('P: preview leaves saved rules untouched', (await preview(command)).verdict === null)
+    policy = { disabledBuiltIns: ['power'], customRules: [draft] }
+    check('P: the same engine reads updated settings', (await preview('reboot')).verdict === null && (await preview(command)).verdict?.rule === draft.id)
+  } catch (error) {
+    check('P: run completed', false, error.stack ?? error.message)
+  } finally {
+    await withTimeout(sdk.request('shutdown', {}), 8_000, 'shutdown P').catch(() => {})
+    await withTimeout(eng.exited, 8_000, 'exit P').catch(() => eng.child.kill('SIGKILL'))
+  }
 }
 
 // ── phase X: plugins from the real npm registry (network; no API key needed) ─

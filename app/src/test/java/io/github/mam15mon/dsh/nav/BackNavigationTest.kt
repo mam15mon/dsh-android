@@ -41,7 +41,7 @@ class BackNavigationTest {
     }
 
     private val routeClasses = listOf(HomeRoute::class, OnboardingRoute::class, OnboardingKeyRoute::class, EnhanceRoute::class, PlatformWebRoute::class,
-        AutomationRoute::class, RuleRoute::class, SettingsRoute::class, SectionRoute::class, ProviderRoute::class, ModeRoute::class, PluginRoute::class,
+        AutomationRoute::class, RuleRoute::class, SettingsRoute::class, SectionRoute::class, ProviderRoute::class, ModeRoute::class, CommandRuleEditRoute::class, PluginRoute::class,
         MarketEntryRoute::class, IndexesRoute::class, McpRoute::class, AppNotesRoute::class, AppNotesGroupRoute::class, NotifAppsRoute::class)
 
     private fun routeOf(e: NavBackStackEntry): Any = e.toRoute(routeClasses.first { e.destination.hasRoute(it) })
@@ -65,6 +65,10 @@ class BackNavigationTest {
         add(model + ProviderRoute() + ProviderRoute(preset = "openrouter"))
         val modes = settings + section(SettingsSection.Modes)
         add(modes + ModeRoute("m1")); add(modes + ModeRoute())
+        val commandRules = settings + section(SettingsSection.CommandRules)
+        add(commandRules + CommandRuleEditRoute())
+        add(commandRules + CommandRuleEditRoute(id = "custom-rule"))
+        add(commandRules + CommandRuleEditRoute(baseRule = "remote-payload"))
         val ext = settings + section(SettingsSection.Extensions)
         add(ext + PluginRoute("a")); add(ext + MarketEntryRoute("https://x/index.json", "b")); add(ext + IndexesRoute)
         add(ext + McpRoute("s1")); add(ext + McpRoute()); add(ext + McpRoute(npm = true))

@@ -86,6 +86,7 @@ import io.github.mam15mon.dsh.core.model.PermissionPreset
 import io.github.mam15mon.dsh.core.model.ToolGroup
 import io.github.mam15mon.dsh.feature.conversation.PresetUi
 import io.github.mam15mon.dsh.nav.AppNotesRoute
+import io.github.mam15mon.dsh.nav.CommandRuleEditRoute
 import io.github.mam15mon.dsh.nav.ModeRoute
 import io.github.mam15mon.dsh.nav.NotifAppsRoute
 import io.github.mam15mon.dsh.nav.ProviderRoute
@@ -105,6 +106,7 @@ enum class SettingsSection(val label: Int, val icon: Int) {
     Model(R.string.set_model, R.drawable.dsw_data_outline), Agent(R.string.set_agent, R.drawable.dsw_apps_add_outline),
     Extensions(R.string.set_extensions, R.drawable.dsw_cordis_plugin_outline),
     Modes(R.string.set_modes, R.drawable.dsw_agent_preset_outline),
+    CommandRules(R.string.set_command_rules, R.drawable.dsw_shield_outline),
     Usage(R.string.set_usage, R.drawable.dsw_gauge_outline), Phone(R.string.set_phone, R.drawable.dsw_shield_outline),
     About(R.string.set_about, R.drawable.dsw_info_outline);
     companion object {
@@ -151,6 +153,7 @@ fun SettingsSectionScreen(section: SettingsSection, onBack: () -> Unit, open: (R
             SettingsSection.Agent -> AgentSection(vm) { open(AppNotesRoute) }
             SettingsSection.Extensions -> io.github.mam15mon.dsh.feature.extensions.ExtensionsSection(open, onTop)
             SettingsSection.Modes -> ModesSection(vm) { open(ModeRoute(it.takeUnless { id -> id == NEW_MODE })) }
+            SettingsSection.CommandRules -> CommandRulesSection(hiltViewModel()) { id, base -> open(CommandRuleEditRoute(id, base)) }
             SettingsSection.Usage -> UsageSection(vm)
             SettingsSection.Phone -> PhoneSection(vm) { open(NotifAppsRoute) }
             SettingsSection.About -> AboutSection(vm)

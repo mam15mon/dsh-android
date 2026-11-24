@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="set_command_rules">Правила команд</string>
+    <string name="command_rules_custom">Пользовательские правила</string>
+    <string name="command_rules_add">Добавить правило</string>
+    <string name="command_rules_edit">Изменить правило</string>
+    <string name="command_rules_copy_name">%1$s (копия)</string>
+    <string name="command_rules_example">Запретить принудительную отправку в Git</string>
+    <string name="command_rules_built_in_hint">Нажмите на встроенное правило, чтобы скопировать его. Переключатель действует на одно правило.</string>
+    <string name="command_rules_delete_group">Защита от удаления</string>
+    <string name="command_rules_disk_group">Диски и устройства</string>
+    <string name="command_rules_system_group">Системные операции</string>
+    <string name="command_rules_script_group">Скрипты и процессы</string>
+    <string name="command_rule_system_directory">Удаление содержимого системных каталогов</string>
+    <string name="command_rule_storage_root">Рекурсивное удаление защищённых каталогов</string>
+    <string name="command_rule_find_delete">Удаление защищённых путей через find</string>
+    <string name="command_rule_device_redirect">Перенаправление вывода в узел устройства</string>
+    <string name="command_rule_device_copy">Запись в узел устройства через dd</string>
+    <string name="command_rule_device_format">Форматирование блочного устройства</string>
+    <string name="command_rule_disk_tool">Разметка дисков и прошивка</string>
+    <string name="command_rule_power">Перезагрузка или выключение</string>
+    <string name="command_rule_wipe">Удаление данных устройства</string>
+    <string name="command_rule_setting_delete">Удаление системных настроек</string>
+    <string name="command_rule_system_package">Удаление системных пакетов</string>
+    <string name="command_rule_fork_bomb">Исчерпание процессов (fork bomb)</string>
+    <string name="command_rule_encoded_payload">Декодирование с немедленным запуском</string>
+    <string name="command_rule_remote_payload">Загрузка с немедленным запуском</string>
+    <string name="command_rules_json_help">Правило редактируется в JSON. name задаёт название, command — программу, argumentPrefix — начальные аргументы по порядку, anyArguments — любой из перечисленных аргументов, pathUnder — путь внутри каталога. baseRule ссылается на встроенное правило и проверяется вместе с другими условиями.</string>
+    <string name="command_rules_preview">Проверка команды</string>
+    <string name="command_rules_preview_hint">Правила проверяются из рабочего каталога движка по умолчанию. Редактор учитывает несохранённое правило. Команда не запускается.</string>
+    <string name="command_rules_check">Проверить команду</string>
+    <string name="command_rules_no_match">Совпадений нет. При выполнении будут действовать разрешения сессии.</string>
+    <string name="command_rules_match">Совпадение %1$s\n%2$s</string>
+    <string name="command_rules_error">Ошибка обработки правил команд (%1$s)</string>
+</resources>

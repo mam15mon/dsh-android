@@ -9,6 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.navigation.NavBackStackEntry
@@ -28,6 +29,7 @@ import io.github.mam15mon.dsh.feature.conversation.HomeViewModel
 import io.github.mam15mon.dsh.feature.extensions.ExtensionsSubPage
 import io.github.mam15mon.dsh.feature.extensions.extensionsPageTitle
 import io.github.mam15mon.dsh.feature.settings.AppNotesScreen
+import io.github.mam15mon.dsh.feature.settings.CommandRuleEditor
 import io.github.mam15mon.dsh.feature.settings.EnhanceStep
 import io.github.mam15mon.dsh.feature.settings.ModeScreen
 import io.github.mam15mon.dsh.feature.settings.NotificationAppsScreen
@@ -72,6 +74,10 @@ fun NavGraphBuilder.dshGraph(nav: NavHostController, home: () -> HomeViewModel) 
         }
         composable<ModeRoute> { e ->
             InSettings(nav, e) { ModeScreen(e.toRoute(), onBack = { nav.up(e) }, onReplace = { nav.replaceMode(it) }) }
+        }
+        composable<CommandRuleEditRoute> { e ->
+            val route = e.toRoute<CommandRuleEditRoute>()
+            InSettings(nav, e) { CommandRuleEditor(route.id, route.baseRule, onBack = { nav.up(e) }, vm = hiltViewModel()) }
         }
         composable<PluginRoute> { e -> ExtensionsPage(nav, e, e.toRoute<PluginRoute>()) }
         composable<MarketEntryRoute> { e -> ExtensionsPage(nav, e, e.toRoute<MarketEntryRoute>()) }

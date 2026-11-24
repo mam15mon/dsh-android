@@ -482,6 +482,7 @@ A `socketpair(AF_UNIX, SOCK_STREAM)`; Node opens it with `new net.Socket({ fd })
 ### Node → App requests
 - `capability/list {}` → `{ tools: ToolDescriptor[] }`
 - `capability/invoke { sessionId, callId, tool, args, timeoutMs? }` → `ToolResult` (`timeoutMs`: the budget the plugin uses for this call, see §3.1)
+- `command-policy/get {}` → `{ disabledBuiltIns: string[], customRules: CustomCommandRule[] }`. `plugin-guard` reads the app's saved policy before checking a shell invocation and reads it again after an approval. If the app channel fails, that invocation fails. A standalone engine without the app uses the built-in defaults.
 - `experience/turn { sessionId, ok }` → `{ reflect: boolean, package?, label? }` — a root turn that used app/screen
   tools ended (`ok`: `turn/end` reason `completed`). The app records the turn's tap route (App 经验库) and says whether
   the plugin should reflect on it (successful, in an app, setting 任务结束后自动总结经验 on).
@@ -558,8 +559,8 @@ later, or send an SMS twice after a retry). The rules:
 - `@dsh-android/plugin-account`: loopback OAuth callback server + account SDK methods/notifications (§2.4).
 - `@dsh-android/plugin-mode`: session modes (§2.5): per-conversation tool restriction + guard, skills switch, mode prompt
   section, selection record; deferred tools and `load_tools` (§2.5.1).
-- `@dsh-android/plugin-guard`: hardline command floor for the shell tool (relative paths resolve against the session
-  cwd and any `cd` earlier in the command); approval policy (§2); token/cost budget enforcement from `budget/update`;
+- `@dsh-android/plugin-guard`: enabled command rules for shell tools (relative paths resolve against the session
+  cwd and any `cd` earlier in the command); `android/command-policy/check { command, draft? }` checks a sample with the same matcher and engine default directory. This SDK method does not dispatch the command. Approval policy (§2); token/cost budget enforcement from `budget/update`;
   system-prompt section describing the phone context and the tool-priority rule (system API > intent/deeplink >
   Shizuku > accessibility clicks), whose "works while locked" examples are derived from `needsUnlock:false`
   descriptors; unattended-run context; post-turn reflection for the App 经验库 (`experience.js`: one tool-free call

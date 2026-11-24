@@ -12,6 +12,7 @@ import dagger.Lazy
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.github.mam15mon.dsh.core.account.AccountRepository
 import io.github.mam15mon.dsh.core.capability.CapabilityHub
+import io.github.mam15mon.dsh.core.data.CommandPolicyRepository
 import io.github.mam15mon.dsh.core.data.SecretStore
 import io.github.mam15mon.dsh.core.data.SettingsRepository
 import io.github.mam15mon.dsh.core.provider.ReasoningLevels
@@ -29,6 +30,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -37,6 +39,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -90,6 +93,7 @@ class RouteUnavailableException(message: String) : Exception(message)
 class EngineManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val settings: SettingsRepository,
+    private val commandPolicy: CommandPolicyRepository,
     private val secrets: SecretStore,
     private val capabilities: Lazy<CapabilityHub>,
     private val sessions: Lazy<SessionStore>,
@@ -346,7 +350,10 @@ class EngineManager @Inject constructor(
                 ParcelFileDescriptor.AutoCloseInputStream(bridgeFd),
                 ParcelFileDescriptor.AutoCloseOutputStream(ParcelFileDescriptor.dup(bridgeFd.fileDescriptor)),
                 scope,
-                onRequest = { m, p -> capabilities.get().onBridgeRequest(m, p) },
+                onRequest = { m, p ->
+                    if (m == "command-policy/get") RpcJson.encodeToJsonElement(commandPolicy.policy.first())
+                    else capabilities.get().onBridgeRequest(m, p)
+                },
                 onNotification = { m, p -> if (m == "budget/exceeded") sessions.get().onBudgetExceeded(p) else capabilities.get().onBridgeNotification(m, p) },
                 onClosed = {})
             peer.start(); bridgePeer.start()

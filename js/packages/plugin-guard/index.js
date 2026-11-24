@@ -1,7 +1,6 @@
 // @dsh-android/plugin-guard — policy floor for DSH-Android (ENGINE-CONTRACT §4):
-//  1. Hardline command floor for shell tools: blocked before approval and not
-//     overridable (a prepended `tools/pre-execute` deny plus a monotonic
-//     `ctx.tools.guard` backstop that no listener can bypass).
+//  1. Enabled command rules for shell tools: the app supplies the policy, and a
+//     prepended `tools/pre-execute` deny plus `ctx.tools.guard` enforce it across approval.
 //  2. Approvals. Android runs without an OS sandbox, so mutating built-ins ask;
 //     to keep friction low the guard auto-allows read-only shell commands and
 //     file writes inside the app's own HOME/TMPDIR, never asks for `sensitive`
@@ -234,7 +233,7 @@ Approvals and safety:
 - Read-only tools and read-only shell commands run directly${homeWrites ? ', and so do file writes inside your private home and temp folders (except in 仅可查看 mode)' : ''}. Other actions that change the phone ask the user, depending on the permission mode the user picked for this conversation; a read of private data (messages, contacts, notifications, clipboard, …) asks once per conversation.
 - If the user rejects a call, do not retry it — ask what they want instead. If a call is refused because the conversation is in 仅可查看 (read-only) mode, tell the user and ask them to switch the permission mode if they want the change made.
 - Before deleting, moving or overwriting files, state exactly which files and folders are affected (list them, or give the count and paths) and confirm the scope with the user unless they already named the exact items. Prefer the narrowest scope; never act on whole storage roots.
-- The app hard-blocks some shell commands, in bash and adb_shell alike (wiping storage roots or system directories, formatting or writing block devices, reboot/shutdown, fork bombs, executing decoded payloads, uninstalling system packages, deleting system settings): such a call is refused before it runs and returns HARDLINE_BLOCKED. Never try to work around a block.
+- The app checks shell commands, including bash and adb_shell, against the user's enabled command rules. A match returns HARDLINE_BLOCKED before the command runs. Tell the user which rule matched and never try to work around the block.
 
 ${screenSection(descriptors)}${shell ? "Shell: the bash tool runs Android's /system/bin/sh (mksh) with toybox utilities, not GNU bash/coreutils; there is no root. " : ''}The user's shared storage is /sdcard (= /storage/emulated/0). Your working directory is the app's private home folder.
 
@@ -340,6 +339,17 @@ export function apply(ctx, config = {}) {
   let presetsReported = false
 
   const bridge = () => ctx.get('androidBridge')
+  const approvedPolicies = new WeakMap()
+  const readCommandPolicy = async signal => {
+    const channel = bridge()
+    if (channel?.request === undefined) {
+      if (process.env.DSH_BRIDGE_FD) throw new Error('The app command policy is unavailable')
+      return undefined // Standalone engine without the app uses all built-ins.
+    }
+    const policy = await channel.request('command-policy/get', {}, { signal, timeoutMs: 3_000 })
+    if (policy === null || typeof policy !== 'object' || Array.isArray(policy)) throw new TypeError('Invalid app command policy')
+    return policy
+  }
   /** Per plugin / MCP server "ask before call" (@dsh-android/plugin-extensions). */
   const askBeforeCall = toolName => { try { return ctx.get('androidExtensions')?.askBeforeCall?.(toolName) === true } catch { return false } }
   const descriptors = () => { try { return bridge()?.tools?.() ?? [] } catch { return [] } }
@@ -376,17 +386,27 @@ export function apply(ctx, config = {}) {
     }],
     // ── 7. reasoning levels per model route (the composer's 推理强度; #46) ──────
     ['android/models/reasoning', params => reasoningLevels(ctx.get('llm'), params?.models)],
+    ['android/command-policy/check', async params => {
+      if (typeof params?.command !== 'string' || params.command.trim() === '') throw new TypeError('A command is required')
+      const policy = await readCommandPolicy()
+      const draft = params.draft
+      const customRules = policy?.customRules ?? []
+      const preview = draft === undefined ? policy : {
+        ...policy, customRules: [...customRules.filter(rule => rule.id !== draft.id), draft],
+      }
+      return { verdict: checkCommand(params.command, { cwd: process.env.DSH_ENGINE_CWD, policy: preview }) ?? null }
+    }],
   ])
   ctx.on('sdk-extensions/resolve', method => methods.get(method))
   // ── 8. per-conversation model (#53) ─────────────────────────────────────────
   setupSessionModel(ctx)
 
   // ── 1. Hardline floor ──────────────────────────────────────────────────────
-  const hardlineVerdict = exec => {
+  const shellCommand = exec => {
     const device = DEVICE_SHELL_TOOLS.get(exec.name)
     if (device !== undefined) {
       const text = exec.arguments?.[device]
-      return typeof text === 'string' ? checkCommand(text, { cwd: DEVICE_SHELL_CWD, env: { HOME: DEVICE_SHELL_CWD } }) : undefined
+      return typeof text === 'string' ? { text, cwd: DEVICE_SHELL_CWD, env: { HOME: DEVICE_SHELL_CWD } } : undefined
     }
     const field = SHELL_TOOLS.get(exec.name)
     if (field === undefined) return undefined
@@ -395,7 +415,12 @@ export function apply(ctx, config = {}) {
     const base = sessionCwd(exec.agent) ?? process.env.HOME
     const workdir = exec.arguments?.workdir
     const cwd = typeof workdir === 'string' && workdir !== '' ? posix.resolve(base ?? '/', workdir) : base
-    return checkCommand(text, { cwd })
+    return { text, cwd }
+  }
+  const hardlineVerdict = (shell, policy) => checkCommand(shell.text, { cwd: shell.cwd, env: shell.env, policy })
+  const denyHardline = (exec, v) => {
+    log(ctx, 'warn', `hardline blocked ${exec.name} (${v.rule})`)
+    return { kind: 'deny', reason: refusalText(v), info: { name: 'HardlineBlocked', code: 'HARDLINE_BLOCKED' } }
   }
 
   /** Mutating built-ins that need no approval: read-only shell, writes inside HOME/TMPDIR. */
@@ -437,13 +462,7 @@ export function apply(ctx, config = {}) {
     }
   }
 
-  ctx.on('tools/pre-execute', async (exec, next) => {
-    const v = hardlineVerdict(exec)
-    if (v !== undefined) {
-      log(ctx, 'warn', `hardline blocked ${exec.name} (${v.rule})`)
-      return { kind: 'deny', reason: refusalText(v), info: { name: 'HardlineBlocked', code: 'HARDLINE_BLOCKED' } }
-    }
-    // ── 2. approvals ──────────────────────────────────────────────────────────
+  const approveTool = async (exec, next, beforeAsk) => {
     const decision = await next()
     const root = rootSessionId(ctx, exec.agent)
     const unattended = isUnattended(root)
@@ -461,12 +480,35 @@ export function apply(ctx, config = {}) {
     // Reading the phone's own data (location, notifications, …) never asks in a conversation.
     if (sensitive && !unattended) return { kind: 'allow' }
     if (preset === PRESETS.readOnly) return { kind: 'deny', reason: readOnlyRefusal(exec.name) }
+    beforeAsk?.()
     return resolveAsk(exec, ask, { root, unattended, preset })
+  }
+
+  ctx.on('tools/pre-execute', async (exec, next) => {
+    const shell = shellCommand(exec)
+    if (shell === undefined) return approveTool(exec, next)
+
+    const initial = await readCommandPolicy(exec.signal)
+    const beforeApproval = hardlineVerdict(shell, initial)
+    if (beforeApproval !== undefined) return denyHardline(exec, beforeApproval)
+    approvedPolicies.set(exec, initial)
+
+    let asked = false
+    const decision = await approveTool(exec, next, () => { asked = true })
+    if (asked && decision?.kind === 'allow') {
+      // The user may have changed the policy while an approval card was open.
+      const latest = await readCommandPolicy(exec.signal)
+      const beforeDispatch = hardlineVerdict(shellCommand(exec) ?? shell, latest)
+      if (beforeDispatch !== undefined) return denyHardline(exec, beforeDispatch)
+      approvedPolicies.set(exec, latest)
+    }
+    return decision
   }, { prepend: true })
   // Backstop: guards run after every pre-execute decision and cannot be overridden.
   if (typeof ctx.tools.guard === 'function') {
     ctx.tools.guard(exec => {
-      const v = hardlineVerdict(exec)
+      const shell = shellCommand(exec)
+      const v = shell === undefined ? undefined : hardlineVerdict(shell, approvedPolicies.get(exec))
       return v === undefined ? undefined : refusalText(v)
     })
   }

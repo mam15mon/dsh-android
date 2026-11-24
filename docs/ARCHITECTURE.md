@@ -87,7 +87,7 @@ Shizuku 用户服务（shell uid，可选）：ShellUserService
 风险等级 `read / write / sensitive / dangerous` 定义在 `core/model/Models.kt`。
 
 **审批**分两层：
-- 引擎侧 `plugin-guard`：`read` 和 `sensitive` 在对话里直接执行（无人值守的自动化仍按规则授权）；只读 shell 命令和 `HOME`/`TMPDIR` 内的 `write`/`edit` 不询问（权限模式为“仅可查看”或未知时除外）；hardline 禁止清单（删除受保护目录、刷分区、重启、恢复出厂设置、卸载系统包、`curl|sh` 等）在任何授权下都拒绝。
+- 引擎侧 `plugin-guard`：`read` 和 `sensitive` 在对话里直接执行（无人值守的自动化仍按规则授权）。只读 shell 命令和 `HOME`/`TMPDIR` 内的 `write`/`edit` 可以免审批。设置 → 命令规则保存全局规则，14 条内置规则默认开启，可以逐项停用或复制成自定义规则。引擎在审批前通过能力桥读取规则，任何启用的规则命中都会拒绝，批准后还会重新检查一次。试跑使用同一检查器和引擎默认工作目录。
 - App 侧 `SessionStore.approve`：按会话的权限模式处理。三种模式对应 dsh 的预设：仅可查看（`read-only`，审批类操作一律拒绝）、询问（`workspace-write`，读取类直接执行，其余弹审批卡片，可选“允许一次 / 本会话允许 / 拒绝”；`dangerous` 每次都要确认）、完全访问（`danger-full-access`，**默认**，只有给别人发消息的 `sms_send` / `notification_reply` 还要确认，其余都自动允许）。没有生物识别确认。每次 `session/prompt` 之前把模式通过 `android/session/permission` 发给引擎。
 - 预算：会话和每日 token 上限在设置里配置，通过 `budget/update` 下发，由 `plugin-guard` 在每一步之前检查；超限时发 `budget/exceeded`，会话里显示提示。
 

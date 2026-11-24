@@ -36,6 +36,24 @@ const DISK_TOOLS = new Set(['blkdiscard', 'wipefs', 'sgdisk', 'sfdisk', 'fdisk',
 const MKFS = /^(mkfs(\..+)?|mke2fs|mkswap|make_ext4fs|make_f2fs|mkdosfs|mkfs_vfat|newfs_msdos|mkexfatfs|mkntfs)$/
 const BENIGN_DEV = /^\/dev\/(null|zero|random|urandom|stdout|stderr|stdin|tty|fd\/\d+)$/
 const MAX_DEPTH = 6
+const BUILT_INS = new Set([
+  'rm-system-dir', 'rm-protected-root', 'find-delete-protected',
+  'write-block-device', 'dd-block-device', 'mkfs-block-device', 'disk-tool',
+  'power', 'wipe', 'settings-delete', 'pm-uninstall-system',
+  'fork-bomb', 'encoded-payload', 'remote-payload',
+])
+
+// A complete, literal curl | node -e pipeline. Match raw shell text so expansions,
+// redirects, extra commands and Node options cannot become part of this exception.
+const CURL_TO_NODE = /^[ \t]*curl(?:[ \t]+-[fLsS]+)*[ \t]+(?:https:\/\/[\w./%~:+@=?,-]+|(?<urlQuote>['"])https:\/\/[\w./%~:+@=?&,-]+\k<urlQuote>)[ \t]*\|[ \t]*node[ \t]+-e[ \t]+(?:'(?<singleQuoted>[^']*)'|"(?<doubleQuoted>[^"\\$`]*)")[ \t]*$/
+const READ_NODE_STDIN = String.raw`require\s*\(\s*(?:"(?:node:)?fs"|'(?:node:)?fs')\s*\)\s*\.\s*readFileSync\s*\(\s*0\s*,\s*(?:"utf-?8"|'utf-?8')\s*\)`
+const LOG_PARSED_JSON = String.raw`console\s*\.\s*log\s*\(\s*JSON\s*\.\s*parse\s*\(\s*`
+const PRINT_STDIN_JSON = new RegExp(String.raw`^\s*(?:${LOG_PARSED_JSON}${READ_NODE_STDIN}|const\s+(?<input>[A-Za-z_]\w*)\s*=\s*${READ_NODE_STDIN}\s*;\s*${LOG_PARSED_JSON}\k<input>)\s*\)\s*\)\s*;?\s*$`)
+
+function isNodeJsonPipeline(text) {
+  const script = CURL_TO_NODE.exec(text)?.groups
+  return script !== undefined && PRINT_STDIN_JSON.test(script.singleQuoted ?? script.doubleQuoted)
+}
 
 /** Shell-ish tokenizer: returns simple commands as arrays of words plus redirect targets. */
 export function splitCommands(text) {
@@ -196,12 +214,14 @@ function checkRm(argv, ctx, segment) {
   for (const raw of targets) {
     const t = normalizeTarget(raw, ctx.cwd)
     if (t === undefined) continue
-    for (const dir of SYSTEM_DIRS) {
-      if (dir !== '/' && (isUnder(t.full, dir) || (t.wildcardParent !== undefined && isUnder(t.wildcardParent, dir)))) {
-        return verdict('rm-system-dir', `deletes ${t.full}, inside the protected system directory ${dir}`, segment)
+    if (ctx.enabled.has('rm-system-dir')) {
+      for (const dir of SYSTEM_DIRS) {
+        if (isUnder(t.full, dir) || (t.wildcardParent !== undefined && isUnder(t.wildcardParent, dir))) {
+          return verdict('rm-system-dir', `deletes ${t.full}, inside the protected system directory ${dir}`, segment)
+        }
       }
     }
-    if (!recursive) continue
+    if (!recursive || !ctx.enabled.has('rm-protected-root')) continue
     if (PROTECTED_ROOTS.includes(t.full)) return verdict('rm-protected-root', `recursively deletes the protected root ${t.full}`, segment)
     if (t.wildcardParent !== undefined && PROTECTED_ROOTS.includes(t.wildcardParent)) {
       return verdict('rm-protected-root', `recursively deletes the contents of the protected root ${t.wildcardParent} (${t.full})`, segment)
@@ -248,12 +268,34 @@ function blockDeviceTarget(target) {
   return target.startsWith('/dev/') && !BENIGN_DEV.test(target)
 }
 
+function customVerdict(argv, ctx, segment) {
+  const name = baseName(argv[0])
+  const args = argv.slice(1)
+  for (const { id, spec } of ctx.custom) {
+    if (spec.command != null && spec.command !== name) continue
+    if (spec.argumentPrefix?.some((arg, index) => arg !== args[index])) continue
+    if (spec.anyArguments?.length && !spec.anyArguments.some(arg => args.includes(arg))) continue
+    if (spec.pathUnder != null) {
+      const dir = path.posix.resolve('/', spec.pathUnder)
+      if (!args.some(arg => !arg.startsWith('-') && isUnder(path.posix.resolve(ctx.cwd, arg), dir))) continue
+    }
+    return verdict(id, `matches your command rule ${JSON.stringify(spec.name)}`, segment)
+  }
+  return undefined
+}
+
 function checkSimple(argv, redirects, ctx, segment, depth) {
-  for (const r of redirects) {
-    if (blockDeviceTarget(r)) return verdict('write-block-device', `redirects output onto the device node ${r}`, segment)
+  if (ctx.enabled.has('write-block-device')) {
+    for (const r of redirects) {
+      if (blockDeviceTarget(r)) return verdict('write-block-device', `redirects output onto the device node ${r}`, segment)
+    }
   }
   const a = unwrap(argv)
   if (a.length === 0) return undefined
+  if (ctx.custom.length > 0) {
+    const custom = customVerdict(a, ctx, segment)
+    if (custom !== undefined) return custom
+  }
   const cmd = baseName(a[0])
   // Nested shells: sh -c '...', su -c '...', su 0 sh -c ...
   if (SHELLS.has(cmd)) {
@@ -276,30 +318,37 @@ function checkSimple(argv, redirects, ctx, segment, depth) {
   }
   if (cmd === 'eval') return checkText(a.slice(1).join(' '), ctx, depth + 1)
   if (cmd === 'rm' || cmd === 'unlink' || cmd === 'rmdir' || cmd === 'shred' || cmd === 'srm') return checkRm(cmd === 'rm' || cmd === 'shred' || cmd === 'srm' ? a : ['rm', ...a.slice(1)], ctx, segment)
-  if (cmd === 'find') return checkFind(a, ctx, segment)
-  if (cmd === 'dd') {
+  if (cmd === 'find' && ctx.enabled.has('find-delete-protected')) return checkFind(a, ctx, segment)
+  if (cmd === 'dd' && ctx.enabled.has('dd-block-device')) {
     const of = a.find(w => w.startsWith('of='))
     if (of !== undefined && blockDeviceTarget(of.slice(3))) return verdict('dd-block-device', `dd writes to the device node ${of.slice(3)}`, segment)
     return undefined
   }
-  if (MKFS.test(cmd)) {
+  if (ctx.enabled.has('mkfs-block-device') && MKFS.test(cmd)) {
     if (a.slice(1).some(w => w.startsWith('/dev/'))) return verdict('mkfs-block-device', `${cmd} formats a block device`, segment)
     return undefined
   }
-  if (DISK_TOOLS.has(cmd)) return verdict('disk-tool', `${cmd} rewrites disk partitions or flash`, segment)
-  if (POWER_COMMANDS.has(cmd)) return verdict('power', `${cmd} powers off or restarts the phone`, segment)
-  if (cmd === 'svc' && a[1] === 'power' && /^(reboot|shutdown)$/.test(a[2] ?? '')) return verdict('power', `svc power ${a[2]} restarts or powers off the phone`, segment)
-  if (cmd === 'setprop' && /^sys\.powerctl$|^ctl\.(start|restart)$/.test(a[1] ?? '') && (a[1] === 'sys.powerctl' || /reboot|shutdown/.test(a[2] ?? ''))) return verdict('power', `setprop ${a[1]} restarts or powers off the phone`, segment)
-  if (cmd === 'cmd' && a[1] === 'power' && /^(reboot|shutdown|reboot-safe-mode)$/.test(a[2] ?? '')) return verdict('power', `cmd power ${a[2]} restarts or powers off the phone`, segment)
-  if (cmd === 'am' && a.some(w => /(android\.intent\.action\.(REBOOT|ACTION_REQUEST_SHUTDOWN|REQUEST_SHUTDOWN|MASTER_CLEAR|FACTORY_RESET))|com\.android\.internal\.intent\.action\.REQUEST_SHUTDOWN/.test(w))) {
-    return verdict(a.some(w => /MASTER_CLEAR|FACTORY_RESET/.test(w)) ? 'wipe' : 'power', 'sends a reboot/shutdown/factory-reset intent', segment)
+  if (ctx.enabled.has('disk-tool') && DISK_TOOLS.has(cmd)) return verdict('disk-tool', `${cmd} rewrites disk partitions or flash`, segment)
+  if (ctx.enabled.has('power')) {
+    if (POWER_COMMANDS.has(cmd)) return verdict('power', `${cmd} powers off or restarts the phone`, segment)
+    if (cmd === 'svc' && a[1] === 'power' && /^(reboot|shutdown)$/.test(a[2] ?? '')) return verdict('power', `svc power ${a[2]} restarts or powers off the phone`, segment)
+    if (cmd === 'setprop' && /^sys\.powerctl$|^ctl\.(start|restart)$/.test(a[1] ?? '') && (a[1] === 'sys.powerctl' || /reboot|shutdown/.test(a[2] ?? ''))) return verdict('power', `setprop ${a[1]} restarts or powers off the phone`, segment)
+    if (cmd === 'cmd' && a[1] === 'power' && /^(reboot|shutdown|reboot-safe-mode)$/.test(a[2] ?? '')) return verdict('power', `cmd power ${a[2]} restarts or powers off the phone`, segment)
   }
-  if (cmd === 'wipe') return verdict('wipe', 'wipe erases device data', segment)
-  if (cmd === 'recovery' && a.some(w => /wipe/.test(w))) return verdict('wipe', 'recovery wipe erases device data', segment)
-  if ((cmd === 'settings' && a[1] === 'delete') || (cmd === 'cmd' && a[1] === 'settings' && a[2] === 'delete')) return verdict('settings-delete', 'deletes a system setting', segment)
-  if (cmd === 'content' && a[1] === 'delete' && a.some(w => /content:\/\/settings/.test(w))) return verdict('settings-delete', 'deletes a system setting through the settings provider', segment)
+  if (cmd === 'am' && a.some(w => /(android\.intent\.action\.(REBOOT|ACTION_REQUEST_SHUTDOWN|REQUEST_SHUTDOWN|MASTER_CLEAR|FACTORY_RESET))|com\.android\.internal\.intent\.action\.REQUEST_SHUTDOWN/.test(w))) {
+    const rule = a.some(w => /MASTER_CLEAR|FACTORY_RESET/.test(w)) ? 'wipe' : 'power'
+    if (ctx.enabled.has(rule)) return verdict(rule, 'sends a reboot/shutdown/factory-reset intent', segment)
+  }
+  if (ctx.enabled.has('wipe')) {
+    if (cmd === 'wipe') return verdict('wipe', 'wipe erases device data', segment)
+    if (cmd === 'recovery' && a.some(w => /wipe/.test(w))) return verdict('wipe', 'recovery wipe erases device data', segment)
+  }
+  if (ctx.enabled.has('settings-delete')) {
+    if ((cmd === 'settings' && a[1] === 'delete') || (cmd === 'cmd' && a[1] === 'settings' && a[2] === 'delete')) return verdict('settings-delete', 'deletes a system setting', segment)
+    if (cmd === 'content' && a[1] === 'delete' && a.some(w => /content:\/\/settings/.test(w))) return verdict('settings-delete', 'deletes a system setting through the settings provider', segment)
+  }
   const pmArgs = cmd === 'pm' ? a.slice(1) : cmd === 'cmd' && a[1] === 'package' ? a.slice(2) : undefined
-  if (pmArgs !== undefined) {
+  if (pmArgs !== undefined && ctx.enabled.has('pm-uninstall-system')) {
     if (pmArgs[0] === 'uninstall-system-updates') return verdict('pm-uninstall-system', 'removes system app updates', segment)
     if (pmArgs[0] === 'uninstall') {
       const pkg = pmArgs.slice(1).filter((w, i, arr) => !/^-/.test(w) && arr[i - 1] !== '--user' && arr[i - 1] !== '--versionCode').pop()
@@ -312,7 +361,7 @@ function checkSimple(argv, redirects, ctx, segment, depth) {
 /**
  * Check one shell command string.
  * @param {string} text - the command as the model wrote it.
- * @param {{ cwd?: string, env?: Record<string,string|undefined> }} [options]
+ * @param {{ cwd?: string, env?: Record<string,string|undefined>, readFile?: Function, policy?: object }} [options]
  */
 export function checkCommand(text, options = {}) {
   if (typeof text !== 'string' || text.length === 0) return undefined
@@ -320,21 +369,46 @@ export function checkCommand(text, options = {}) {
     EXTERNAL_STORAGE: '/sdcard', ANDROID_STORAGE: '/storage', ANDROID_DATA: '/data', ANDROID_ROOT: '/system',
     SECONDARY_STORAGE: '/storage', ...process.env, ...options.env,
   }
-  return checkText(text, { cwd: options.cwd ?? env.HOME ?? '/', env, readFile: options.readFile }, 0)
+  const ctx = { cwd: options.cwd ?? env.HOME ?? '/', env, readFile: options.readFile, custom: [] }
+  const disabled = new Set(options.policy?.disabledBuiltIns ?? [])
+  const enabled = disabled.size === 0 ? BUILT_INS : new Set([...BUILT_INS].filter(id => !disabled.has(id)))
+  const builtIn = checkText(text, { ...ctx, enabled }, 0)
+  if (builtIn !== undefined) return builtIn
+
+  // A copied rule uses its original predicate even if that built-in is turned off.
+  const baseMatches = new Map()
+  const custom = []
+  let baseOnly
+  for (const rule of options.policy?.customRules ?? []) {
+    if (rule.enabled === false) continue
+    const { baseRule, command } = rule.spec
+    if (baseRule != null) {
+      if (!baseMatches.has(baseRule)) baseMatches.set(baseRule, checkText(text, { ...ctx, enabled: new Set([baseRule]) }, 0))
+      const base = baseMatches.get(baseRule)
+      if (base === undefined) continue
+      if (command == null) {
+        baseOnly = verdict(rule.id, `matches your command rule ${JSON.stringify(rule.spec.name)}`, base.segment)
+        break
+      }
+    }
+    custom.push(rule)
+  }
+  return (custom.length > 0 ? checkText(text, { ...ctx, enabled: new Set(), custom }, 0) : undefined) ?? baseOnly
 }
 
 function checkText(text, ctx, depth) {
   if (depth > MAX_DEPTH) return undefined
   // Whole-text patterns that span pipes.
   const compact = text.replace(/\\\n/g, ' ')
-  if (/(^|[\s;&|(])([A-Za-z_:.][\w:.]*)\s*\(\)\s*\{[^}]*\2\s*\|\s*\2\s*&/.test(compact) || /:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/.test(compact)) {
+  if (ctx.enabled.has('fork-bomb') && (/(^|[\s;&|(])([A-Za-z_:.][\w:.]*)\s*\(\)\s*\{[^}]*\2\s*\|\s*\2\s*&/.test(compact) || /:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/.test(compact))) {
     return verdict('fork-bomb', 'defines a self-replicating fork bomb', compact)
   }
-  if (DECODERS.test(compact) && (SHELL_SINK.test(compact) || /\b(eval|sh|bash|mksh|su)\b[^|;&]*\$\(/.test(compact) || /\|\s*(?:\S*\/)?(?:xargs\s+)?(?:sh|bash|mksh)\b/.test(compact))) {
+  if (ctx.enabled.has('encoded-payload') && DECODERS.test(compact) && (SHELL_SINK.test(compact) || /\b(eval|sh|bash|mksh|su)\b[^|;&]*\$\(/.test(compact) || /\|\s*(?:\S*\/)?(?:xargs\s+)?(?:sh|bash|mksh)\b/.test(compact))) {
     return verdict('encoded-payload', 'decodes an encoded payload and executes it with a shell', compact)
   }
-  if (FETCHERS.test(compact) && SHELL_SINK.test(compact.slice(compact.search(FETCHERS)))) {
-    return verdict('remote-payload', 'pipes downloaded content straight into a shell', compact)
+  const fetchAt = ctx.enabled.has('remote-payload') ? compact.search(FETCHERS) : -1
+  if (fetchAt !== -1 && SHELL_SINK.test(compact.slice(fetchAt)) && !isNodeJsonPipeline(text)) {
+    return verdict('remote-payload', 'matches a download-to-interpreter pipeline', compact)
   }
   const { commands, nested } = splitCommands(compact)
   for (const inner of nested) {
@@ -342,7 +416,7 @@ function checkText(text, ctx, depth) {
     if (v !== undefined) return v
   }
   // `... /sdcard ... | xargs rm -r`: targets arrive on stdin, so judge the literals upstream.
-  if (/\bxargs\b[^|;&]*\brm\s+(?:-\S+\s+)*-[A-Za-z]*[rR]/.test(compact) || /\bxargs\b[^|;&]*\brm\s+[^|;&]*--recursive/.test(compact)) {
+  if (ctx.enabled.has('rm-protected-root') && (/\bxargs\b[^|;&]*\brm\s+(?:-\S+\s+)*-[A-Za-z]*[rR]/.test(compact) || /\bxargs\b[^|;&]*\brm\s+[^|;&]*--recursive/.test(compact))) {
     for (const { words } of commands) {
       for (const w of words) {
         const t = normalizeTarget(expandVars(w, ctx.env), ctx.cwd)
@@ -382,7 +456,7 @@ function cdTarget(argv, ctx) {
 /** The model-facing refusal text (also used as the denial reason). */
 export function refusalText(v) {
   return `HARDLINE_BLOCKED (rule: ${v.rule}): this command ${v.summary}. ` +
-    'DSH-Android never runs it — not with user approval, not in any permission mode. ' +
+    'This enabled command rule takes precedence over session approval. ' +
     'Do not retry it or work around it with another command or tool. Tell the user it was blocked, and if they ' +
     'need something narrower (for example deleting specific files), propose that instead. ' +
     `Blocked segment: ${JSON.stringify(v.segment)}`
