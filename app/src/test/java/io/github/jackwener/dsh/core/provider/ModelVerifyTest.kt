@@ -334,4 +334,55 @@ class ModelVerifyTest {
         assertIs<VerifyFailure.Network>(f)
         assertFalse(f!!.modelSpecific)
     }
+
+    @Test fun outputCapFieldIsLearnedFromTheRefusal() {
+        val openai = "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead."
+        assertEquals(CAP_MAX_COMPLETION_TOKENS, tokenFieldWanted(openai))
+        assertEquals(CAP_MAX_COMPLETION_TOKENS, tokenFieldWanted("upstream 400: max_tokens is not supported, please use max_completion_tokens"))
+        assertEquals(CAP_MAX_TOKENS, tokenFieldWanted("Unknown parameter: 'max_completion_tokens'.", sent = CAP_MAX_COMPLETION_TOKENS))
+        // nothing to learn from an unrelated 400, or from a refusal of the field that was not sent
+        assertNull(tokenFieldWanted("messages: at least one message is required"))
+        assertNull(tokenFieldWanted(openai, sent = CAP_MAX_COMPLETION_TOKENS))
+    }
+
+    @Test fun probeIsAskedAgainWithTheOtherCapFieldOnlyAfterThatRefusal() {
+        val asked = mutableListOf<String>()
+        val relay: (String) -> VerifyFailure? = { cap ->
+            asked += cap
+            if (cap == CAP_MAX_TOKENS) VerifyFailure.Server(400, "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.") else null
+        }
+        assertNull(probeCapped("", null, "m", true, probe = relay))
+        assertEquals(listOf(CAP_MAX_TOKENS, CAP_MAX_COMPLETION_TOKENS), asked)
+
+        asked.clear()
+        val other: (String) -> VerifyFailure? = { cap -> asked += cap; VerifyFailure.Server(400, "messages: at least one message is required") }
+        assertIs<VerifyFailure.Server>(probeCapped("", null, "m", true, probe = other))
+        assertEquals(listOf(CAP_MAX_TOKENS), asked)
+
+        // the body names the field it was asked for, once
+        val body = Json.parseToJsonElement(probeBody("m", true, CAP_MAX_COMPLETION_TOKENS)).jsonObject
+        assertTrue(body.containsKey("max_completion_tokens"))
+        assertFalse(body.containsKey("max_tokens"))
+    }
+
+    @Test fun protocolDetectionPrefersChatAndAsksResponsesOnlyWhenChatIsNotServed() {
+        val asked = mutableListOf<String>()
+        // an endpoint that speaks both: Chat answers, Responses is never asked
+        assertEquals(API_CHAT, detectApi { api -> asked += api; null }.api)
+        assertEquals(listOf(API_CHAT), asked)
+        // a model that answered in text still spoke the protocol
+        assertEquals(API_CHAT, detectApi { VerifyFailure.NoToolCall("hello") }.api)
+        // Chat is not served (404), Responses is
+        asked.clear()
+        val onlyResponses = detectApi { api -> asked += api; if (api == API_CHAT) VerifyFailure.Server(404, "not found") else null }
+        assertEquals(API_RESPONSES, onlyResponses.api)
+        assertEquals(listOf(API_CHAT, API_RESPONSES), asked)
+        // a bad key says nothing of the protocol: one request, no answer
+        asked.clear()
+        val badKey = detectApi { api -> asked += api; VerifyFailure.KeyInvalid("bad key") }
+        assertNull(badKey.api)
+        assertEquals(listOf(API_CHAT), asked)
+        // neither served
+        assertNull(detectApi { VerifyFailure.Server(404, "nope") }.api)
+    }
 }

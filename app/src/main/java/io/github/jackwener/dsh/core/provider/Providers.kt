@@ -50,6 +50,12 @@ data class ProviderPreset(
     val sessionHeader: String? = null,
     /** The editor offers the OpenAI Responses protocol ([API_RESPONSES]) besides Chat Completions (#59). */
     val responses: Boolean = false,
+    /**
+     * A WorkBuddy build (`workbuddy`, `workbuddy-ai`): signs in in the browser or takes an API key, and its
+     * model list, connection test and chats go through the engine's plugin-workbuddy (WorkBuddy.kt,
+     * docs/ENGINE-CONTRACT.md §2.8), not through `/models`.
+     */
+    val workbuddy: String? = null,
 )
 
 /*
@@ -77,6 +83,12 @@ val PRESETS = listOf(
     // and their own User-Agent; chats without the header are refused (INVALID_REQUEST), /models answers anyway.
     // Base URL as reported working in #32; the docs also list https://opencode.ai/inference/go/openai/v1.
     ProviderPreset("opencode-go", "OpenCode Go", "https://opencode.ai/zen/go/v1", keysUrl = "https://opencode.ai/docs/go/", sessionHeader = OPENCODE_SESSION_HEADER),
+    // WorkBuddy (Tencent CodeBuddy). Signs in in the browser or takes a key made on the build's keys page; the key is
+    // optional here because a sign-in is the other way. Base URLs: the builds' API roots, chat at {base}/chat/completions.
+    ProviderPreset(WORKBUDDY, "WorkBuddy（腾讯 CodeBuddy）", "https://copilot.tencent.com/v2", listOf("glm-5.3"), keyOptional = true,
+        keysUrl = "https://www.workbuddy.cn/profile/keys", workbuddy = WORKBUDDY),
+    ProviderPreset(WORKBUDDY_AI, "WorkBuddy AI（国际版）", "https://www.workbuddy.ai/v2", listOf("glm-5.3"), keyOptional = true,
+        keysUrl = "https://www.workbuddy.ai/profile/keys", workbuddy = WORKBUDDY_AI),
     // On the user's computer: the phone reaches it at the computer's LAN IP (the editor's localhost warning says so).
     ProviderPreset("ollama", "Ollama", "http://localhost:11434/v1", keyOptional = true, editableUrl = true, localHint = R.string.prov_hint_ollama, responses = true),
     ProviderPreset("lmstudio", "LM Studio", "http://localhost:1234/v1", keyOptional = true, editableUrl = true, localHint = R.string.prov_hint_lmstudio, responses = true),
@@ -84,6 +96,9 @@ val PRESETS = listOf(
 )
 
 const val CUSTOM = "custom"
+/** The WorkBuddy builds: preset ids, and the `site` the engine plugin knows them by. */
+const val WORKBUDDY = "workbuddy"
+const val WORKBUDDY_AI = "workbuddy-ai"
 const val OPENCODE_SESSION_HEADER = "x-opencode-session"
 
 /** Wire protocols a provider may speak: the engine's `interfaceType` spellings (llm-service-lite INTERFACE_TYPES). */
@@ -441,7 +456,14 @@ fun renderProfilePatch(providers: List<ProviderConfig>, webSearch: Boolean, user
  */
 data class RemoteModel(val id: String, val contextWindow: Long? = null, val maxTokens: Int? = null, val chat: Boolean? = null, val tools: Boolean? = null,
     /** Image input as the listing marks it (ModelVision.listed). */
-    val images: Boolean? = null)
+    val images: Boolean? = null,
+    /**
+     * Reasoning levels the listing states (WorkBuddy's `/v3/config`): empty = the model takes no reasoning control,
+     * null = the listing does not say. `none` is the level for "thinking off" (WorkBuddy.kt maps it).
+     */
+    val efforts: List<String>? = null,
+    /** The level the vendor's own client asks for when the user picked none. */
+    val effort: String? = null)
 
 /** A non-2xx answer: [status] and the (truncated) body. The message keeps the `HTTP <code> …` form. */
 class HttpStatusException(val status: Int, val body: String) : Exception("HTTP $status ${body.take(160).replace('\n', ' ')}".trim())

@@ -160,6 +160,12 @@
     # `deepseek-account` model route; this row adds the loopback callback
     # server they need and exposes the account operations and events on the
     # SDK channel (account/* methods, account.* notifications).
+    # WorkBuddy (Tencent CodeBuddy) routes: signs the chats the app's `workbuddy` providers send
+    # (client headers, refreshed token / API key, request spellings) and serves the workbuddy/*
+    # SDK methods (browser sign-in, model list). Inert until a provider points at WorkBuddy.
+    - id: android-workbuddy
+      name: '@dsh-android/plugin-workbuddy'
+
     - id: android-account
       name: '@dsh-android/plugin-account'
       config:

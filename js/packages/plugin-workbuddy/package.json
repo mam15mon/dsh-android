@@ -1,0 +1,22 @@
+{
+  "name": "@dsh-android/plugin-workbuddy",
+  "version": "0.1.0",
+  "description": "DSH-Android WorkBuddy (Tencent CodeBuddy) model routes: browser sign-in, token refresh, API keys, the client headers and request spellings the gateway wants.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./core": "./core.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "core.js",
+    "package.json"
+  ],
+  "engines": {
+    "dsh": "0.2.2-rc.5"
+  }
+}

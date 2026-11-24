@@ -212,13 +212,17 @@ fun rankCandidates(listed: List<RemoteModel>, preset: ProviderPreset?, main: Str
 const val HARNESS_USER_AGENT = "deepseek-harness (+https://github.com/deepseek-ai/deepseek-harness)"
 const val PROBE_TOOL = "dsh_connection_check"
 
-/** The probe's request body: one no-argument tool, and (when [forceTool]) a tool_choice naming it. */
-fun probeBody(model: String, forceTool: Boolean): String = buildJsonObject {
+/**
+ * The probe's request body: one no-argument tool, and (when [forceTool]) a tool_choice naming it.
+ * [capField] is the output-cap field: `max_tokens`, or `max_completion_tokens` for the endpoints that
+ * refuse the first (OpenAI's reasoning models and the gateways in front of them; [tokenFieldWanted]).
+ */
+fun probeBody(model: String, forceTool: Boolean, capField: String = CAP_MAX_TOKENS): String = buildJsonObject {
     put("model", model)
     put("stream", true)
     putJsonObject("stream_options") { put("include_usage", true) }
     // Small, but with room for models that think before they call (MiniMax and some GLM / Kimi models always do).
-    put("max_tokens", 1024)
+    put(capField, 1024)
     putJsonArray("messages") {
         addJsonObject { put("role", "system"); put("content", "This is a connection check. Call the $PROBE_TOOL tool once. Do not reply with text.") }
         addJsonObject { put("role", "user"); put("content", "Call $PROBE_TOOL now.") }
@@ -255,10 +259,30 @@ fun probeResponsesBody(model: String, forceTool: Boolean): String = buildJsonObj
 }.toString()
 
 /** The probe's endpoint and body for [api] ([API_CHAT] or [API_RESPONSES]). */
-fun probeRequest(baseUrl: String, model: String, forceTool: Boolean, api: String = API_CHAT): Pair<String, String> {
+fun probeRequest(baseUrl: String, model: String, forceTool: Boolean, api: String = API_CHAT, capField: String = CAP_MAX_TOKENS): Pair<String, String> {
     val base = baseUrl.trim().trimEnd('/')
     return if (api == API_RESPONSES) "$base/responses" to probeResponsesBody(model, forceTool)
-    else "$base/chat/completions" to probeBody(model, forceTool)
+    else "$base/chat/completions" to probeBody(model, forceTool, capField)
+}
+
+const val CAP_MAX_TOKENS = "max_tokens"
+const val CAP_MAX_COMPLETION_TOKENS = "max_completion_tokens"
+
+private val REFUSES_MAX_TOKENS = Regex("(?:unsupported|not supported|unknown|unrecognized|invalid|unexpected)[^.]{0,60}\\bmax_tokens\\b|\\bmax_tokens\\b[^.]{0,60}(?:not supported|unsupported|deprecated|not allowed)|use ['\"`]?max_completion_tokens", RegexOption.IGNORE_CASE)
+private val REFUSES_COMPLETION_TOKENS = Regex("(?:unsupported|not supported|unknown|unrecognized|invalid|unexpected)[^.]{0,60}\\bmax_completion_tokens\\b|\\bmax_completion_tokens\\b[^.]{0,60}(?:not supported|unsupported|not allowed)|unknown field.{0,20}max_completion_tokens", RegexOption.IGNORE_CASE)
+
+/**
+ * The output-cap field a 400's text says to use instead of [sent], or null when it does not speak of the
+ * cap. The same reading as the engine's (js patch 28): a relay in front of OpenAI hides what is behind it,
+ * so the field is learned from the refusal, not from the address.
+ */
+fun tokenFieldWanted(message: String, sent: String = CAP_MAX_TOKENS): String? {
+    val wanted = when {
+        REFUSES_COMPLETION_TOKENS.containsMatchIn(message) && !REFUSES_MAX_TOKENS.containsMatchIn(message) -> CAP_MAX_TOKENS
+        REFUSES_MAX_TOKENS.containsMatchIn(message) -> CAP_MAX_COMPLETION_TOKENS
+        else -> null
+    }
+    return wanted?.takeIf { it != sent }
 }
 
 /**
@@ -267,8 +291,8 @@ fun probeRequest(baseUrl: String, model: String, forceTool: Boolean, api: String
  * server (Ollama, LM Studio) may load the model before the first byte.
  */
 fun probeToolCall(baseUrl: String, key: String?, model: String, forceTool: Boolean = true, connectTimeoutMs: Int = 10_000, readTimeoutMs: Int = 90_000,
-    headers: Map<String, String> = emptyMap(), api: String = API_CHAT): VerifyFailure? = try {
-    val (url, body) = probeRequest(baseUrl, model, forceTool, api)
+    headers: Map<String, String> = emptyMap(), api: String = API_CHAT, capField: String = CAP_MAX_TOKENS): VerifyFailure? = try {
+    val (url, body) = probeRequest(baseUrl, model, forceTool, api, capField)
     val c = URL(url).openConnection() as HttpURLConnection
     try {
         c.connectTimeout = connectTimeoutMs; c.readTimeout = readTimeoutMs
@@ -350,11 +374,23 @@ private fun errorStatus(o: JsonObject): Int {
 }
 
 /**
+ * [probeToolCall] with `max_tokens`, and once more with `max_completion_tokens` when a 400 says that is the
+ * field the endpoint takes (or back, when it refuses that one): a relay may sit in front of OpenAI.
+ */
+fun probeCapped(baseUrl: String, key: String?, model: String, forceTool: Boolean, headers: Map<String, String> = emptyMap(), api: String = API_CHAT,
+    probe: (String) -> VerifyFailure? = { cap -> probeToolCall(baseUrl, key, model, forceTool, headers = headers, api = api, capField = cap) }): VerifyFailure? {
+    val first = probe(CAP_MAX_TOKENS) ?: return null
+    if (api == API_RESPONSES || first !is VerifyFailure.Server || first.status != 400) return first
+    val wanted = tokenFieldWanted(first.message) ?: return first
+    return probe(wanted)
+}
+
+/**
  * [probeToolCall], and once more without `tool_choice` when the server rejects that field: the
  * engine never sends it, so a model that calls the tool on its own still works in chats.
  */
 fun probeModel(baseUrl: String, key: String?, model: String, headers: Map<String, String> = emptyMap(), api: String = API_CHAT,
-    probe: (Boolean) -> VerifyFailure? = { force -> probeToolCall(baseUrl, key, model, force, headers = headers, api = api) }): VerifyFailure? {
+    probe: (Boolean) -> VerifyFailure? = { force -> probeCapped(baseUrl, key, model, force, headers, api) }): VerifyFailure? {
     val first = probe(true) ?: return null
     val msg = when (first) {
         is VerifyFailure.ToolsUnsupported -> first.message
@@ -428,3 +464,34 @@ fun endpointKey(api: String, baseUrl: String, typedKey: String): String = listOf
  */
 fun verifiedOnSave(models: List<String>, verified: List<String>, verifiedFor: String, endpoint: String): List<String> =
     if (verifiedFor == endpoint) verified.filter { it in models }.distinct() else emptyList()
+
+// ── which protocol an endpoint speaks ──
+
+/** What each protocol answered for one model: null = a tool call came back (or the answer was a plain reply). */
+data class ApiDetection(val chat: VerifyFailure?, val responses: VerifyFailure?, val responsesAsked: Boolean = false) {
+    /** The protocol answers: a tool call, or text where the model chose not to call (it still spoke the protocol). */
+    private fun serves(f: VerifyFailure?) = f == null || f is VerifyFailure.NoToolCall
+
+    /**
+     * The protocol to set: Chat Completions when it answers (what nearly everything speaks), else Responses
+     * when only that does, else null (neither answered: a bad key, address or model, which the error says).
+     */
+    val api: String? get() = when {
+        serves(chat) -> API_CHAT
+        responsesAsked && serves(responses) -> API_RESPONSES
+        else -> null
+    }
+}
+
+/**
+ * Asks [model] once on Chat Completions and once on Responses ([probe] runs one request on the named API) and
+ * says which one(s) answered. Responses is asked only when Chat did not answer: the answer is the same either way
+ * for the endpoints that speak both, and a second request costs the user a call.
+ */
+fun detectApi(probe: (String) -> VerifyFailure?): ApiDetection {
+    val chat = probe(API_CHAT)
+    if (chat == null || chat is VerifyFailure.NoToolCall) return ApiDetection(chat, null)
+    // a key, network or quota failure says nothing of the protocol: asking again on the other one would only repeat it
+    if (!chat.modelSpecific && !(chat is VerifyFailure.Server && (chat.status == 404 || chat.status == 405))) return ApiDetection(chat, null)
+    return ApiDetection(chat, probe(API_RESPONSES), responsesAsked = true)
+}

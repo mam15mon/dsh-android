@@ -1,0 +1,79 @@
+DSH-Android patch 28: llm-service-lite (vendored @snnh/dsh-llm-service-lite 0.2.1), the output-cap field a
+chat-completions endpoint takes. Applies on top of 14 to 27.
+
+The adapter always asks for `max_tokens`. OpenAI's reasoning models, and gateways that forward to them
+(a relay in front of OpenAI, Azure, Bedrock), refuse it with 400 "Unsupported parameter: 'max_tokens' is
+not supported with this model. Use 'max_completion_tokens' instead", so every chat to such a model failed.
+Which field an endpoint takes cannot be told from its address (a relay hides what is behind it), so the
+adapter learns it from the refusal: a 400 whose text names the field is asked once more with the other
+spelling, and the endpoint remembers it for the rest of the process. The reverse refusal ("unknown field
+max_completion_tokens") flips it back. Requests that never meet the refusal are unchanged.
+--- a/@snnh/dsh-llm-service-lite/lib/index.js
++++ b/@snnh/dsh-llm-service-lite/lib/index.js
+@@ -3566,6 +3566,42 @@
+ 	return echoed.some((field) => new RegExp(`(?<![A-Za-z_])${field}(?![A-Za-z_])`, "u").test(text));
+ }
+ /**
++* DSH-Android (patch 28). Which output-cap field a chat-completions endpoint takes, learned from its
++* own refusal: OpenAI's reasoning models (and gateways that forward to them) answer `max_tokens` with
++* 400 "Unsupported parameter: 'max_tokens' … Use 'max_completion_tokens' instead", while most others
++* know only `max_tokens`. The first request goes as it always did; a 400 that names the field is asked
++* once more with the other one, and the endpoint remembers it for the rest of the process.
++*/
++const tokenParamOf = /* @__PURE__ */ new Map();
++const REFUSES_MAX_TOKENS = /(?:unsupported|not supported|unknown|unrecognized|invalid|unexpected)[^.]{0,60}\bmax_tokens\b|\bmax_tokens\b[^.]{0,60}(?:not supported|unsupported|deprecated|not allowed)|use ['"`]?max_completion_tokens/iu;
++const REFUSES_COMPLETION_TOKENS = /(?:unsupported|not supported|unknown|unrecognized|invalid|unexpected)[^.]{0,60}\bmax_completion_tokens\b|\bmax_completion_tokens\b[^.]{0,60}(?:not supported|unsupported|not allowed)|unknown field.{0,20}max_completion_tokens/iu;
++/** The field a 400's text says to use instead, or undefined when it does not speak of the output cap. */
++function tokenParamWanted(text) {
++	if (REFUSES_COMPLETION_TOKENS.test(text) && !REFUSES_MAX_TOKENS.test(text)) return "max_tokens";
++	if (REFUSES_MAX_TOKENS.test(text)) return "max_completion_tokens";
++}
++/** [body] (a JSON text) with its output cap spelled [want]; unchanged when it has none or already uses it. */
++function swapTokenParam(body, want) {
++	try {
++		const parsed = JSON.parse(body);
++		const from = want === "max_tokens" ? "max_completion_tokens" : "max_tokens";
++		if (parsed[from] === void 0 || parsed[want] !== void 0) return body;
++		parsed[want] = parsed[from];
++		delete parsed[from];
++		return JSON.stringify(parsed);
++	} catch (_notJson) {
++		return body;
++	}
++}
++function withTokenParam(request, profile) {
++	if (profile.interfaceType !== "openai-chat-completions") return request;
++	const want = tokenParamOf.get(endpointKey(profile.baseURL));
++	return want === void 0 ? request : {
++		...request,
++		body: swapTokenParam(request.body, want)
++	};
++}
++/**
+ * A non-streaming chat completion (an endpoint or proxy that ignores `stream: true`) as the one
+ * stream frame it is equivalent to: each `message` becomes its choice's `delta`, and tool calls
+ * get the positional `index` the stream protocol would have carried.
+@@ -5360,6 +5396,8 @@
+ 		for (let attempt = 0;; attempt += 1) {
+ 			request = transport.request(profile, model, options, apiKey, versions);
+ 			request.headers = routeHeaders(request.headers, profile, options.sessionId, secretHeaders);
++			// DSH-Android (patch 28): the output-cap field this endpoint was learned to take.
++			request = withTokenParam(request, profile);
+ 			response = await fetch(request.url, {
+ 				method: "POST",
+ 				headers: request.headers,
+@@ -5374,6 +5412,14 @@
+ 				echoRefused.add(endpointKey(profile.baseURL));
+ 				continue;
+ 			}
++			// DSH-Android (patch 28): a 400 that says the output-cap field is not the one this endpoint takes.
++			if (response.status === 400 && attempt < 2 && profile.interfaceType === "openai-chat-completions") {
++				const wanted = tokenParamWanted(text);
++				if (wanted !== void 0 && tokenParamOf.get(endpointKey(profile.baseURL)) !== wanted && swapTokenParam(request.body, wanted) !== request.body) {
++					tokenParamOf.set(endpointKey(profile.baseURL), wanted);
++					continue;
++				}
++			}
+ 			let raw;
+ 			try {
+ 				raw = JSON.parse(text);

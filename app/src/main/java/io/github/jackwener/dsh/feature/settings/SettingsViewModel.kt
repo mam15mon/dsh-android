@@ -68,6 +68,8 @@ class SettingsViewModel @Inject constructor(
     private val sessionDao: io.github.jackwener.dsh.core.data.SessionDao,
     private val agentScreen: io.github.jackwener.dsh.core.capability.AgentScreen,
     val updater: io.github.jackwener.dsh.core.update.AppUpdater,
+    /** WorkBuddy's sign-in, model list and connection test, through the engine (WorkBuddy.kt). */
+    val workbuddy: io.github.jackwener.dsh.core.provider.WorkBuddyService,
 ) : ViewModel() {
     val settings: StateFlow<DshSettings> = repo.settings.stateIn(viewModelScope, SharingStarted.Eagerly, DshSettings())
     val usage: StateFlow<List<UsageEntity>> = usage.observe().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -114,8 +116,11 @@ class SettingsViewModel @Inject constructor(
         appRequestHeaders(resolveHeaderRows(rows ?: headerRowsOf(existing), existing) { secrets.read(it) }, sessionHeader, appUserAgent(io.github.jackwener.dsh.BuildConfig.VERSION_NAME))
     fun setProviderEnabled(p: ProviderConfig, on: Boolean) = viewModelScope.launch { repo.saveProvider(p.copy(enabled = on)) }
     /** `GET {baseUrl}/models` with [key] (or the stored key of [existing]); also the connection test. */
-    suspend fun fetchModels(baseUrl: String, key: String?, existing: ProviderConfig?, headerRows: List<HeaderRow>? = null, sessionHeader: String? = existing?.sessionHeader): Result<io.github.jackwener.dsh.core.provider.FetchedModels<io.github.jackwener.dsh.core.provider.RemoteModel>> = withContext(Dispatchers.IO) {
+    suspend fun fetchModels(baseUrl: String, key: String?, existing: ProviderConfig?, headerRows: List<HeaderRow>? = null, sessionHeader: String? = existing?.sessionHeader,
+        site: String? = io.github.jackwener.dsh.core.provider.presetOf(existing?.preset)?.workbuddy): Result<io.github.jackwener.dsh.core.provider.FetchedModels<io.github.jackwener.dsh.core.provider.RemoteModel>> = withContext(Dispatchers.IO) {
         val k = key?.trim()?.takeIf { it.isNotEmpty() } ?: existing?.takeIf { it.hasKey }?.let { secrets.read(it.secretName) }
+        // WorkBuddy lists its models at /v3/config, behind its client headers: the engine asks (WorkBuddy.kt).
+        if (site != null) return@withContext runCatching { io.github.jackwener.dsh.core.provider.FetchedModels(workbuddy.models(site, k), baseUrl.trim().trimEnd('/')) }
         val headers = requestHeaders(existing, headerRows, sessionHeader)
         io.github.jackwener.dsh.core.provider.fetchModelsResolving(baseUrl, k) { u, kk -> io.github.jackwener.dsh.core.provider.fetchModels(u, kk, headers) }
     }
@@ -124,12 +129,27 @@ class SettingsViewModel @Inject constructor(
 
     /** 测试: real chat requests with a tool on protocol [api], [candidates] in order (ModelVerify.kt). [onTesting] runs on an IO thread. */
     suspend fun verifyModels(baseUrl: String, key: String?, existing: ProviderConfig?, candidates: List<String>, onTesting: (String) -> Unit,
-        headerRows: List<HeaderRow>? = null, sessionHeader: String? = existing?.sessionHeader, api: String = existing?.api ?: API_CHAT): VerifyOutcome =
+        headerRows: List<HeaderRow>? = null, sessionHeader: String? = existing?.sessionHeader, api: String = existing?.api ?: API_CHAT,
+        site: String? = io.github.jackwener.dsh.core.provider.presetOf(existing?.preset)?.workbuddy): VerifyOutcome =
         withContext(Dispatchers.IO) {
             val k = keyFor(existing, key)
             // A fresh session id per probe: each test call stands alone (appRequestHeaders).
-            verifyCandidates(candidates, onTesting = onTesting) { probeModel(baseUrl, k, it, requestHeaders(existing, headerRows, sessionHeader), api) }
+            verifyCandidates(candidates, onTesting = onTesting) {
+                if (site != null) probeWorkBuddy(site, k, it) else probeModel(baseUrl, k, it, requestHeaders(existing, headerRows, sessionHeader), api)
+            }
         }
+
+    /** Which protocol [model] answers on at [baseUrl] (Chat Completions, else Responses): the editor's 自动识别. Blocks on IO. */
+    suspend fun detectApi(baseUrl: String, key: String?, existing: ProviderConfig?, model: String, headerRows: List<HeaderRow>? = null,
+        sessionHeader: String? = existing?.sessionHeader): io.github.jackwener.dsh.core.provider.ApiDetection = withContext(Dispatchers.IO) {
+        val k = keyFor(existing, key)
+        val headers = requestHeaders(existing, headerRows, sessionHeader)
+        io.github.jackwener.dsh.core.provider.detectApi { api -> probeModel(baseUrl, k, model, headers, api) }
+    }
+
+    /** The connection test of a WorkBuddy model: the same two-try probe (with, then without `tool_choice`), sent by the engine. Blocks: call from IO. */
+    private fun probeWorkBuddy(site: String, key: String?, model: String): VerifyFailure? =
+        probeModel("", key, model, probe = { force -> kotlinx.coroutines.runBlocking { workbuddy.probe(site, key, model, force) } })
 
     /** Saves the editor's provider and, when [main] is set (a model that passed 测试), makes that model the main model. */
     suspend fun saveEdited(p: ProviderConfig, key: String?, main: String?, headerRows: List<HeaderRow>? = null) {
@@ -150,7 +170,10 @@ class SettingsViewModel @Inject constructor(
         if (modelCheck.value?.busy == true) return@launch
         if (select && model in p.verified) { modelCheck.value = null; repo.setModel(p.id, model); return@launch }
         modelCheck.value = ModelCheck(p.id, model, busy = true)
-        val f = withContext(Dispatchers.IO) { probeModel(p.baseUrl, keyFor(p, null), model, requestHeaders(p, null, p.sessionHeader), p.api) }
+        val site = io.github.jackwener.dsh.core.provider.presetOf(p.preset)?.workbuddy
+        val f = withContext(Dispatchers.IO) {
+            if (site != null) probeWorkBuddy(site, keyFor(p, null), model) else probeModel(p.baseUrl, keyFor(p, null), model, requestHeaders(p, null, p.sessionHeader), p.api)
+        }
         repo.updateProvider(p.id) { cur -> cur.copy(verified = if (f == null) (cur.verified + model).distinct() else cur.verified - model) }
         modelCheck.value = when {
             f == null -> {

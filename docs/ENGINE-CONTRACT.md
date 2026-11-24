@@ -118,6 +118,13 @@ for requests outside a session), and `"userAgent":"DSH-Android/<version>"` on ev
 `DSH-Android/<version> deepseek-harness/<v> (+url)`). Keys are omitted when empty. 获取模型列表 and 测试 send the same
 extra headers, the same User-Agent and a fresh session id.
 
+Output cap field (patch 28): the adapter asks for `max_tokens`. OpenAI's reasoning models, and gateways in front of them
+(a relay cannot be told from its address), refuse it with 400 "Unsupported parameter: 'max_tokens' … Use
+'max_completion_tokens' instead". A 400 that names the field is asked once more with the other spelling and the endpoint
+remembers it for the process (the reverse refusal flips it back); everything else about the request is unchanged. The
+app's 测试 does the same on its own probe (`probeCapped`, ModelVerify.kt), and 自动识别 in the editor (`detectApi`) asks a
+model once on Chat Completions and, only when that is not served, on Responses.
+
 Errors: a third-party turn that fails because the account may not use the model (403 `Model.AccessDenied`, 您无权访问,
 未开通 / Ark `ModelNotOpen`, SiliconFlow 30011, an OpenAI project without access) ends with code `MODEL_NOT_AVAILABLE`
 and message `llm-service-lite: model "<id>" is not available to this account: <server text>` (not retried; the app
@@ -372,6 +379,73 @@ started while the session is idle, which the app showed as the run ending; long 
   record (older engine) a `completed` turn whose todo list has open items counts as `pending_work`. 继续 logs an
   `app/notice { kind: "user_continue" }` and sends an app prompt (`[DSH] …`, do not repeat what succeeded); the
   continuation turn folds into the ended one. The nudge shows as a notice inside the turn.
+
+### 2.8 WorkBuddy — `@dsh-android/plugin-workbuddy`
+
+WorkBuddy (Tencent's CodeBuddy plan; the China build `workbuddy` at `https://copilot.tencent.com/v2`, WorkBuddy AI
+`workbuddy-ai` at `https://www.workbuddy.ai/v2`) is an ordinary `openai-chat-completions` route the app writes into the
+patch layer (§1.1; presets of the same ids, `ProviderPreset.workbuddy`). What its gateway needs on top is done below
+the adapter, in the engine, by the plugin; the wire facts follow `magpie-community/plugins` `packages/workbuddy`
+(MIT), measured there against real accounts.
+
+- **A `fetch` wrapper** signs every request to `<endpoint>/v2/chat/completions` and passes all other URLs through:
+  the client headers (`User-Agent: WorkBuddy/<app> …`, `X-IDE-*`, `X-Product`, `X-Agent-*`; the gateway refuses an
+  unknown User-Agent with code 10085), and the account. A request that carries a bearer is an **API key's** (made on the
+  build's keys page): sent as WorkBuddy's CLI sends one, `X-API-Key` and the bearer both the key, `X-User-Id:
+  anonymous_<last 8 characters>`, no `X-Domain`; one account, no rotation, no credits. A request without one is the
+  **stored sign-ins'**.
+- **Sign-in.** `workbuddy/sign-in/start` asks `/v2/plugin/auth/state` for the page, returns it (the app opens it in
+  the browser) and polls `/v2/plugin/auth/token` then `/v2/plugin/login/account` every second for 5 minutes. Each
+  account (access and refresh tokens, expiry, uid, domain, enterprise) is kept in
+  `$DSH_HOME/android/workbuddy/<site>.json` (`{accounts: […]}`, 0600), written only by the plugin; the app never holds
+  it. Several accounts per build: an account is `uid|enterpriseId`, signing in as one already there renews it. A team /
+  education account the sign-in page chose is asked for as that enterprise (`X-Enterprise-Id`, `X-Tenant-Id`).
+  Cloud-hosted enterprise hosts are not routed.
+- **Refresh.** A token within 60 s of its end is renewed before the chat (`/v2/plugin/auth/token/refresh`, one refresh
+  token spent once however many requests ask); a 401 on a chat renews once and sends it again; a refused refresh marks
+  the account expired (sign in again). The old token is used while it lasts if a renewal fails otherwise.
+- **Credits.** `POST <endpoint>/billing/meter/get-user-resource-summary` (no `/v2`; the billing API is not asked with a
+  key): the plan's credits used of the cycle's total, plus prepaid packages that state only what is left. Cached for a
+  minute per account; read after each successful chat in the background and by `workbuddy/usage`.
+- **Rotation.** A chat goes to the account last used while it can serve, else the one with the most credits left (an
+  account known to have none goes last). When the gateway turns an account away — 429 (rests 5 min), 402 or a body
+  that says the credits are gone (rests 1 h), 403 code 11140 "restricted for unusual activity" (rests 24 h) — or its
+  sign-in is gone (expired until signed in again), the **same chat** goes to the next account that can serve. Any
+  other error (a refused prompt, a 5xx) is the chat's own and is not rotated. Rests live in the engine's memory.
+- **The request.** The gateway serves chat streamed only (non-stream: 11101; the adapter always streams) and takes
+  `max_tokens` (not `max_completion_tokens`), `system` (not `developer`), an assistant turn's thinking as `reasoning` (it
+  drops `reasoning_content`), and a system message first. It also refuses a chat whose system or assistant text holds
+  a line it knows from another agent (11128, "Illegal API invocation from an unapproved channel"); the plugin rewords
+  those lines (`FLAGGED` in `core.js`: DSH's own opening line gets a comma).
+- **Reasoning.** `/v3/config` states each model's levels (`reasoning.supportedEfforts`, else low / high / max when it
+  `supportsReasoning`) and its default (`defaultEffort`); `none` (thinking off) is a level unless the model only
+  reasons. `workbuddy/models` returns them as `efforts` (`[]` = no control) and `effort`; the app declares them as the
+  model's 推理控制 (patch 22 path), writing `none` as DSH's lowest level `minimal` (DSH's level names are fixed). The
+  plugin keeps each model's `{efforts, effort}` from the last config read (`<site>.models.json`) and, per chat:
+  `minimal` becomes `none` for a model that lists it; a chat that names no level gets the model's default (the gateway
+  does not think without one, as its own client sends it), unless its output budget is 1024 tokens or less (titles,
+  classifications, the connection test).
+- **Models** come from `/v3/config` (the `cli` agent's models and the enterprise's own `custom:` ids, with the window
+  and output cap) for a sign-in and for `ck_` / `pt_` keys; any other key, and an empty config, use the build's known
+  list. The listing is **not** `/models`: the app's 获取模型列表 asks `workbuddy/models`.
+- **Not done** (magpie's plugin does them): daily check-in credits, the cloud-hosted enterprise hosts, the OpenAI SDK
+  fingerprint headers, the free-model window (WorkBuddy's own rate window for `deepseek-v4.1-flash`).
+
+Methods (app → engine), `site` is `workbuddy` or `workbuddy-ai`:
+
+| Method | Params | Result |
+|---|---|---|
+| `workbuddy/state` | `{site}` | `{ site, signedIn, name, expired, accounts, attempt }`, no network. `accounts[]`: `{ id, name, expired, current, resting: {until, why} \| null, plan, left, total, used, creditsError }`; `attempt` is `{ id, phase: waiting\|done\|failed\|cancelled, url, error, name }` or null |
+| `workbuddy/usage` | `{site}` | the same, every account's credits read afresh |
+| `workbuddy/sign-in/start` | `{site}` | the attempt (`phase: "waiting"`, `url` to open in a browser) |
+| `workbuddy/sign-in/cancel` | `{site}` | the state |
+| `workbuddy/sign-out` | `{site, account?}` | the state; deletes one account's tokens, or every account's of the build |
+| `workbuddy/models` | `{site, key?}` | `{ models: [{ id, name, context?, output?, images, efforts?, effort? }] }` |
+| `workbuddy/probe` | `{site, key?, model, forceTool?}` | `{ status, body }`: the connection test's streamed chat with one tool, `body` its SSE text (read by `readProbeAnswer`, ModelVerify.kt) |
+
+Notification: `workbuddy.changed {site, state}` when a sign-in attempt settles or an account's rest / credits change
+(the app also polls `workbuddy/state` while a sign-in waits). Tests: `node --test js/test/workbuddy.test.mjs` (a fake
+gateway; no stage tree needed).
 
 ## 3. Capability channel (`DSH_BRIDGE_FD`)
 

@@ -87,6 +87,7 @@ import io.github.jackwener.dsh.core.provider.parseTokenInput
 import io.github.jackwener.dsh.core.provider.refreshOffered
 import io.github.jackwener.dsh.core.provider.newRouteId
 import io.github.jackwener.dsh.core.provider.presetOf
+import io.github.jackwener.dsh.core.provider.wbReasoningDecl
 import kotlinx.coroutines.launch
 
 /** Sub-page target of the 模型服务 page: [NEW_PROVIDER] or a provider's route id. */
@@ -274,6 +275,8 @@ private fun ProviderEditor(vm: SettingsViewModel, existing: ProviderConfig?, pre
     var result by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
     // Wire protocol (#59): Chat Completions or OpenAI Responses.
     var api by rememberSaveable { mutableStateOf(existing?.api ?: API_CHAT) }
+    // 自动识别's progress / result line: null | "busy" | the message.
+    var detectState by remember { mutableStateOf<String?>(null) }
     // Models that passed the connection test (as saved, then per 测试) and the endpoint that holds for (endpointKey).
     val verified = remember { mutableStateListOf<String>().apply { addAll(existing?.verified.orEmpty()) } }
     var verifiedFor by remember { mutableStateOf(existing?.let { endpointKey(it.api, it.baseUrl, "") }) }
@@ -281,6 +284,8 @@ private fun ProviderEditor(vm: SettingsViewModel, existing: ProviderConfig?, pre
     var pendingMain by remember { mutableStateOf<String?>(null) }
     val current = existing
     val needsKey = !preset.keyOptional && current?.hasKey != true
+    // WorkBuddy: whether the engine holds a sign-in (read by WorkBuddyLogin); null until it has been asked.
+    var wbSignedIn by remember { mutableStateOf<Boolean?>(null) }
     // 高级设置: extra request headers and the per-conversation session header (js patch 18).
     val headerRows = remember { mutableStateListOf<HeaderRow>().apply { addAll(headerRowsOf(existing)) } }
     var sessionHeader by rememberSaveable { mutableStateOf(if (existing != null) existing.sessionHeader.orEmpty() else preset.sessionHeader.orEmpty()) }
@@ -298,6 +303,8 @@ private fun ProviderEditor(vm: SettingsViewModel, existing: ProviderConfig?, pre
         fetchState = if (fixed) context.getString(R.string.prov_fetch_ok_v1, list.size, fetched.baseUrl) else context.getString(R.string.prov_fetch_ok, list.size)
         // A fresh listing replaces what it reports on (fields it dropped are dropped here too).
         list.forEach { detected[it.id] = it }
+        // WorkBuddy's config states each model's reasoning levels: declare them (never over the user's own declaration).
+        if (preset.workbuddy != null) list.forEach { m -> if (reasoningDecls[m.id] == null) wbReasoningDecl(m.efforts)?.let { reasoningDecls[m.id] = it } }
         val r = refreshOffered(offered.toList(), list.map { it.id }, selected.toList() + manual)
         offered.clear(); offered.addAll(r.offered)
         missing.clear(); missing.addAll(r.missing)
@@ -312,7 +319,7 @@ private fun ProviderEditor(vm: SettingsViewModel, existing: ProviderConfig?, pre
         result = null
         baseUrl = normalizeBaseUrl(baseUrl)
         testing = context.getString(R.string.prov_testing_list)
-        val listing = vm.fetchModels(baseUrl, key, current, headerRows.toList(), sessionHeaderOrNull())
+        val listing = vm.fetchModels(baseUrl, key, current, headerRows.toList(), sessionHeaderOrNull(), preset.workbuddy)
         listing.onSuccess(::applyListing)
         listing.exceptionOrNull()?.let { t ->
             val f = VerifyErrors.ofThrowable(t)
@@ -332,7 +339,7 @@ private fun ProviderEditor(vm: SettingsViewModel, existing: ProviderConfig?, pre
         }
         val base = baseUrl
         val endpoint = endpointKey(api, base, key)
-        val outcome = vm.verifyModels(base, key, current, candidates, { m -> testing = context.getString(R.string.prov_testing_model, m) }, headerRows.toList(), sessionHeaderOrNull(), api)
+        val outcome = vm.verifyModels(base, key, current, candidates, { m -> testing = context.getString(R.string.prov_testing_model, m) }, headerRows.toList(), sessionHeaderOrNull(), api, preset.workbuddy)
         testing = null
         val plan = planTest(outcome, checked, verified.toList().takeIf { verifiedFor == endpoint }.orEmpty(),
             makeMain = existing == null || s.choice.provider?.id == current?.id)
@@ -366,6 +373,7 @@ private fun ProviderEditor(vm: SettingsViewModel, existing: ProviderConfig?, pre
         !isHttpUrl(baseUrl) -> R.string.prov_err_url
         !headersValid() -> R.string.prov_err_header
         needsKey && key.isBlank() -> R.string.prov_err_key
+        preset.workbuddy != null && key.isBlank() && current?.hasKey != true && wbSignedIn != true -> R.string.prov_wb_need_login
         (listOf(ctxText, maxText) + overrides.values.flatMap { listOf(it.first, it.second) }).any { parseTokenInput(it).isFailure } -> R.string.prov_err_limits
         else -> null
     }
@@ -383,11 +391,33 @@ private fun ProviderEditor(vm: SettingsViewModel, existing: ProviderConfig?, pre
                 Segmented(listOf("Chat Completions", "OpenAI Responses"), if (api == API_RESPONSES) 1 else 0,
                     { api = if (it == 1) API_RESPONSES else API_CHAT }, compact = true)
                 Text(stringResource(R.string.prov_api_hint), style = DshType.xxs12, color = c.labelTertiary)
+                // 自动识别: one probe per protocol on the first ticked (else first listed) model; sets the protocol that answered.
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DButton(stringResource(R.string.prov_api_detect), {
+                        val model = selected.firstOrNull() ?: offered.firstOrNull()
+                        if (model == null) { detectState = context.getString(R.string.prov_api_detect_need_model); return@DButton }
+                        if (!isHttpUrl(baseUrl)) { error = R.string.prov_err_url; return@DButton }
+                        baseUrl = normalizeBaseUrl(baseUrl)
+                        detectState = "busy"
+                        scope.launch {
+                            val d = vm.detectApi(baseUrl, key, current, model, headerRows.toList(), sessionHeaderOrNull())
+                            d.api?.let { api = it }
+                            detectState = when (d.api) {
+                                API_CHAT -> context.getString(R.string.prov_api_detected, "Chat Completions", model)
+                                API_RESPONSES -> context.getString(R.string.prov_api_detected, "OpenAI Responses", model)
+                                else -> context.getString(R.string.prov_api_detect_none, describeFailure(context, (d.chat ?: d.responses)!!))
+                            }
+                        }
+                    }, variant = BtnVariant.Outline, size = BtnSize.Sm, enabled = detectState != "busy" && baseUrl.isNotBlank())
+                    if (detectState == "busy") Spinner(12.dp)
+                }
+                detectState?.takeIf { it != "busy" }?.let { Text(it, style = DshType.xxs12, color = c.labelTertiary) }
             }
             if (baseUrl.startsWith("http://", ignoreCase = true)) Text(stringResource(R.string.prov_http_warning), style = DshType.xxs12, color = c.error)
             // Warn, but allow saving: something may really listen on the phone (e.g. Termux).
             if (NetDiagnose.isOnDeviceAddress(baseUrl)) Text(stringResource(R.string.prov_local_warning), style = DshType.xxs12, color = c.amber)
             preset.localHint?.let { Text(stringResource(it), style = DshType.xxs12, color = c.labelTertiary) }
+            preset.workbuddy?.let { site -> WorkBuddyLogin(vm, site) { wbSignedIn = it.signedIn && !it.expired } }
             Text(stringResource(if (preset.keyOptional) R.string.prov_key_optional else R.string.api_key_label), style = DshType.xs13m, color = c.labelSecondary)
             DInput(key, { key = it }, placeholder = if (existing?.hasKey == true) stringResource(R.string.prov_key_saved) else "sk-…", secret = true, keyboardType = KeyboardType.Password)
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -400,7 +430,7 @@ private fun ProviderEditor(vm: SettingsViewModel, existing: ProviderConfig?, pre
                     baseUrl = normalizeBaseUrl(baseUrl)
                     fetchState = "busy"
                     scope.launch {
-                        vm.fetchModels(baseUrl, key, current, headerRows.toList(), sessionHeaderOrNull()).onSuccess(::applyListing).onFailure { t ->
+                        vm.fetchModels(baseUrl, key, current, headerRows.toList(), sessionHeaderOrNull(), preset.workbuddy).onSuccess(::applyListing).onFailure { t ->
                             fetchOk = false
                             // Same wording as a failed chat turn (Stream.kt ErrorRow): cause, hint, raw detail.
                             fetchNet = NetDiagnose.ofException(t)

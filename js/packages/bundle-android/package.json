@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "@dsh-android/plugin-account": "0.1.0",
+    "@dsh-android/plugin-workbuddy": "0.1.0",
     "@dsh-android/plugin-device": "0.1.0",
     "@dsh-android/plugin-extensions": "0.1.0",
     "@dsh-android/plugin-guard": "0.1.0",
