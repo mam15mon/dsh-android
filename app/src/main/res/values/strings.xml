@@ -966,4 +966,9 @@
     <string name="cloud_voice_transcribing">正在在线转写…</string>
     <string name="cloud_voice_check_config">豆包拒绝了请求，点此检查 API Key 和服务开通状态。</string>
     <string name="cloud_voice_service_failed">语音服务暂时无法转写，点此重新录音。</string>
+    <string name="prov_test_selected">测试勾选模型</string>
+    <string name="prov_test_select_models">请先勾选要测试的模型；手动填写模型 ID 后，请点「添加」。</string>
+    <string name="prov_test_model_failed">测试未通过：%1$s — %2$s</string>
+    <string name="prov_test_model_skipped">未测试：%1$s（前面的请求遇到密钥、网络或服务异常，已停止后续测试）。</string>
+    <string name="prov_test_default">保存后将 %1$s 设为默认模型。</string>
 </resources>

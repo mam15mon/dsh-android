@@ -132,6 +132,13 @@ remembers it for the process (the reverse refusal flips it back); everything els
 app's 测试 does the same on its own probe (`probeCapped`, ModelVerify.kt), and 自动识别 in the editor (`detectApi`) asks a
 model once on Chat Completions and, only when that is not served, on Responses.
 
+The provider editor's **测试勾选模型** snapshots exactly the checked model ids in display order and
+tests every one. Listing is a separate action: testing does not refresh the list, rank candidates,
+substitute the default/preset model, skip ids based on a name heuristic, or stop after a success.
+Only an actual successful tool-call response marks that id verified. A provider-wide error stops
+later requests and lists the remaining ids as untested. Results name every attempted/skipped id;
+partial success is not shown as an all-passed result, and testing never changes the checked set.
+
 Errors: a third-party turn that fails because the account may not use the model (403 `Model.AccessDenied`, 您无权访问,
 未开通 / Ark `ModelNotOpen`, SiliconFlow 30011, an OpenAI project without access) ends with code `MODEL_NOT_AVAILABLE`
 and message `llm-service-lite: model "<id>" is not available to this account: <server text>` (not retried; the app
@@ -424,6 +431,20 @@ the adapter, in the engine, by the plugin; the wire facts follow `magpie-communi
   drops `reasoning_content`), and a system message first. It also refuses a chat whose system or assistant text holds
   a line it knows from another agent (11128, "Illegal API invocation from an unapproved channel"); the plugin rewords
   those lines (`FLAGGED` in `core.js`: DSH's own opening line gets a comma).
+- **Request/response compatibility** follows the upstream WorkBuddy helpers in `compatibility.js`
+  (MIT, upstream commit `716ba754712b593f83006472fbc8d12ed428e7be`, license included). Tool schemas are
+  normalized for the gateway; unsafe tool names are renamed without collisions, including history
+  and tool choice, then restored in streamed replies. Object `tool_choice` uses WorkBuddy's string
+  spelling. A 400/11128 gets the upstream bounded retry sequence: pause the opener with a comma,
+  then, if still refused, send the system text inside an `<instructions>` user block under the
+  gateway's default system prompt. The effective prompt adaptation is remembered per site/system
+  prompt. A tool-result/user boundary rejected with 11153 gets the upstream assistant separator.
+  Other errors do not trigger these retries or rotate accounts. The gateway's `code`, `msg` and
+  request id survive as an OpenAI-compatible error instead of a generic 400.
+- **Probe context.** The WorkBuddy connection probe includes DSH's real harness identity, Android
+  persona and phone instructions and runs through the same compatibility wrapper as normal chats.
+  It still sends only a synthetic no-argument tool; it does not execute phone actions or guarantee
+  that every future tool/history shape will be accepted.
 - **Reasoning.** `/v3/config` states each model's levels (`reasoning.supportedEfforts`, else low / high / max when it
   `supportsReasoning`) and its default (`defaultEffort`); `none` (thinking off) is a level unless the model only
   reasons. `workbuddy/models` returns them as `efforts` (`[]` = no control) and `effort`; the app declares them as the

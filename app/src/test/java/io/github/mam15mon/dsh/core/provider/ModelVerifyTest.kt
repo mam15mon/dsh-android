@@ -102,21 +102,6 @@ class ModelVerifyTest {
 
     // ── candidates ──
 
-    private val zhipu = presetOf("zhipu")
-    @Test fun rankingPrefersMainThenVendorThenToolsThenListOrder() {
-        val listed = listOf(RemoteModel("BAAI/bge-m3"), RemoteModel("a-chat"), RemoteModel("b-tools", tools = true), RemoteModel("embedding-3"),
-            RemoteModel("glm-4.5"), RemoteModel("glm-5.3"), RemoteModel("cogview-4", chat = false), RemoteModel("whisper-1"))
-        assertEquals(listOf("glm-5.3", "glm-4.5", "b-tools"), rankCandidates(listed, zhipu))
-        assertEquals(listOf("a-chat", "glm-5.3", "glm-4.5"), rankCandidates(listed, zhipu, main = "a-chat"))
-        // What the user ticked is the pool; their order breaks ties.
-        assertEquals(listOf("b-tools", "a-chat"), rankCandidates(listed, zhipu, checked = listOf("a-chat", "b-tools", "embedding-3")))
-        // Aggregator: no family, tool-capable first, then listing order.
-        val sf = presetOf("siliconflow")
-        assertEquals(listOf("b-tools", "a-chat", "glm-4.5"), rankCandidates(listed, sf))
-        assertEquals(listOf("only"), rankCandidates(emptyList(), null, checked = listOf("only")))
-        assertEquals(emptyList<String>(), rankCandidates(listOf(RemoteModel("text-embedding-3-small")), presetOf("openai")))
-    }
-
     @Test fun nonChatNames() {
         listOf("text-embedding-3-large", "BAAI/bge-reranker-v2-m3", "tts-1", "whisper-large-v3", "dall-e-3", "omni-moderation-latest",
             "gpt-4o-realtime-preview", "FunAudioLLM/CosyVoice2-0.5B", "Kwai-Kolors/Kolors", "deepseek-ocr", "qwen-image", "jina-reranker-m0",
@@ -177,28 +162,50 @@ class ModelVerifyTest {
 
     // ── the flow ──
 
-    @Test fun flowStopsOnlyForNonModelFailures() {
-        val probe = mapOf<String, VerifyFailure?>("a" to VerifyFailure.ModelNotAvailable("未开通"), "b" to VerifyFailure.NoToolCall("hi"), "c" to null, "d" to null)
+    @Test fun selectedModelsAreAllTestedWithoutAFallbackOrThreeModelLimit() {
+        val selected = listOf("custom/model-z", "other-model", "manually-added", "fourth", "fifth", "custom/model-z")
         val tried = mutableListOf<String>()
-        val ok = verifyCandidates(listOf("a", "b", "c", "d"), onTesting = { tried += it }) { probe[it] }
-        assertEquals("c", (ok as VerifyOutcome.Passed).model)
-        assertEquals(listOf("a", "b"), ok.failed.map { it.first }); assertEquals(listOf("a", "b", "c"), tried)
-
-        val none = verifyCandidates(listOf("a", "b", "x", "c")) { if (it == "c") null else VerifyFailure.ModelNotFound(it) }
-        assertIs<VerifyOutcome.NoModelWorked>(none); assertEquals(3, none.failed.size)
-
-        tried.clear()
-        val key = verifyCandidates(listOf("a", "b"), onTesting = { tried += it }) { VerifyFailure.KeyInvalid("bad") }
-        assertIs<VerifyOutcome.Stopped>(key); assertEquals(listOf("a"), tried)
+        val outcome = verifyCandidates(selected, onTesting = { tried += it }) { null }
+        assertEquals(selected.distinct(), tried)
+        assertEquals(selected.distinct(), outcome.passed)
+        assertTrue(outcome.allPassed)
+        assertTrue(outcome.untested.isEmpty())
+        val empty = verifyCandidates(emptyList()) { error("no selection must never send a request") }
+        assertTrue(empty.results.isEmpty())
+        assertFalse(empty.allPassed)
     }
 
-    @Test fun testPlans() {
-        val passed = VerifyOutcome.Passed("b", listOf("a" to VerifyFailure.ModelNotFound("x")))
-        assertEquals(TestPlan(true, listOf("a", "c", "b"), listOf("c", "b"), "b"), planTest(passed, listOf("a", "c"), listOf("a", "c", "gone"), makeMain = true))
-        assertEquals(TestPlan(true, listOf("b"), listOf("b"), null), planTest(passed, emptyList(), emptyList(), makeMain = false))
-        val none = VerifyOutcome.NoModelWorked(listOf("a" to VerifyFailure.NoToolCall(""), "b" to VerifyFailure.ModelNotFound("")))
-        assertEquals(TestPlan(true, listOf("a", "b"), emptyList(), null), planTest(none, emptyList(), listOf("a"), makeMain = true))
-        assertFalse(planTest(VerifyOutcome.Stopped(VerifyFailure.KeyInvalid(""), emptyList()), listOf("a"), emptyList(), true).apply)
+    @Test fun modelFailuresDoNotStopOtherSelectedModels() {
+        val tried = mutableListOf<String>()
+        val outcome = verifyCandidates(listOf("passes-first", "bad", "passes-last"), onTesting = { tried += it }) {
+            if (it == "bad") VerifyFailure.ModelNotAvailable("未开通") else null
+        }
+        assertEquals(listOf("passes-first", "bad", "passes-last"), tried)
+        assertEquals(listOf("passes-first", "passes-last"), outcome.passed)
+        assertEquals(listOf("bad"), outcome.failed.map { it.first })
+        assertFalse(outcome.allPassed)
+    }
+
+    @Test fun providerFailureNamesTheRemainingModelsAsUntested() {
+        val tried = mutableListOf<String>()
+        val outcome = verifyCandidates(listOf("a", "b", "c"), onTesting = { tried += it }) {
+            if (it == "b") VerifyFailure.KeyInvalid("expired") else null
+        }
+        assertEquals(listOf("a", "b"), tried)
+        assertEquals(listOf("a"), outcome.passed)
+        assertEquals(listOf("c"), outcome.untested)
+        assertFalse(outcome.allPassed)
+        assertEquals(listOf("a", "b", "c"), outcome.results.map { it.model } + outcome.untested)
+    }
+
+    @Test fun testPlansKeepSelectionAndOnlyVerifySuccessfulRequests() {
+        val outcome = VerifyOutcome(listOf(ModelTestResult("a", VerifyFailure.ModelNotFound("no a")), ModelTestResult("b", null)))
+        assertEquals(TestPlan(listOf("a", "b", "c"), listOf("b", "c"), "b"),
+            planTest(outcome, listOf("a", "b", "c"), listOf("a", "c", "gone"), makeMain = true))
+        // A model unchecked while the batch was running must not be added back or made default.
+        assertEquals(TestPlan(listOf("new"), emptyList(), null), planTest(outcome, listOf("new"), emptyList(), true))
+        val stopped = VerifyOutcome(listOf(ModelTestResult("a", VerifyFailure.KeyInvalid("bad key"))), listOf("b"))
+        assertEquals(TestPlan(listOf("a", "b"), emptyList(), null), planTest(stopped, listOf("a", "b"), listOf("a"), true))
     }
 
     @Test fun saveWithoutTestKeepsTestStateOnlyForTheSameEndpoint() {
@@ -301,18 +308,18 @@ class ModelVerifyTest {
         answers["glm-5.3"] = Triple(403, "application/json", """{"error":{"code":"1220","message":"您无权访问 glm-5.3"}}""")
         answers["chatty"] = Triple(200, "text/event-stream", sse("""{"choices":[{"delta":{"content":"pong"},"finish_reason":"stop"}]}"""))
         answers["works"] = Triple(200, "text/event-stream", sse(toolCall))
-        val listed = listOf(RemoteModel("chatty"), RemoteModel("embedding-3"), RemoteModel("glm-5.3"), RemoteModel("works"))
-        val candidates = rankCandidates(listed, presetOf("zhipu"))
-        assertEquals(listOf("glm-5.3", "chatty", "works"), candidates)
+        val candidates = listOf("glm-5.3", "chatty", "works")
         val out = verifyCandidates(candidates) { probeModel(base, "k", it) }
-        assertEquals("works", (out as VerifyOutcome.Passed).model)
+        assertEquals(listOf("works"), out.passed)
         assertIs<VerifyFailure.ModelNotAvailable>(out.failed[0].second)
         assertEquals(VerifyFailure.NoToolCall("pong"), out.failed[1].second)
 
         // A key problem on the first model stops at once.
         answers["k1"] = Triple(401, "application/json", """{"error":{"message":"Invalid Authentication","type":"invalid_authentication_error"}}""")
         requests.clear()
-        assertIs<VerifyOutcome.Stopped>(verifyCandidates(listOf("k1", "works")) { probeModel(base, "k", it) })
+        val stopped = verifyCandidates(listOf("k1", "works")) { probeModel(base, "k", it) }
+        assertEquals(listOf("works"), stopped.untested)
+        assertTrue(stopped.passed.isEmpty())
         assertEquals(1, requests.size)
     }
 

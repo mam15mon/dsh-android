@@ -16,7 +16,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /*
- * 测试: a provider counts as working only when one real chat request with a tool succeeds.
+ * 测试: each selected model passes only when its own real request produces a tool call.
  * A listing (`/models`) proves the address and usually the key, not that chats work: the key may
  * lack chat scope, the model may not be enabled for the account, may not support tools, or the
  * gateway may break streaming. The probe sends what the engine sends (llm-service-lite's
@@ -177,30 +177,6 @@ internal fun listedWithTools(o: JsonObject): Boolean? {
     }
     listOf("supports_tools", "supports_function_calling", "tool_calling", "function_calling").firstNotNullOfOrNull { (o[it] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() }?.let { return it }
     return null
-}
-
-/**
- * The models to test, best first, at most [limit]. [main] (the user's chosen main model) always
- * leads. The pool is [checked] (what the user ticked) when non-empty, else everything [listed];
- * non-chat models are skipped. Order: the preset's suggested models, the vendor's own family, models
- * the listing marks as tool-capable, then listing order.
- */
-fun rankCandidates(listed: List<RemoteModel>, preset: ProviderPreset?, main: String? = null, checked: List<String> = emptyList(), limit: Int = 3): List<String> {
-    val byId = listed.associateBy { it.id }
-    val pool = (if (checked.isNotEmpty()) checked.map { byId[it] ?: RemoteModel(it) } else listed)
-        .filter { it.chat != false && !looksNonChat(it.id) && it.id != main }
-    val family = preset?.family.orEmpty()
-    fun tier(m: RemoteModel): Int {
-        val name = m.id.lowercase().substringAfterLast('/')
-        return when {
-            preset != null && m.id in preset.models -> 0
-            family.any { name.startsWith(it) } -> 1
-            m.tools == true -> 2
-            else -> 3
-        }
-    }
-    val ranked = pool.withIndex().sortedWith(compareBy({ tier(it.value) }, { it.index })).map { it.value.id }
-    return (listOfNotNull(main?.takeIf { it.isNotBlank() }) + ranked).distinct().take(limit)
 }
 
 // ── the probe ──
@@ -405,55 +381,40 @@ fun probeModel(baseUrl: String, key: String?, model: String, headers: Map<String
 
 // ── the flow ──
 
-sealed interface VerifyOutcome {
-    /** All failures so far, in test order (model to why). */
-    val failed: List<Pair<String, VerifyFailure>>
+/** Results for exactly the selected models, in request order; null failure means a tool call passed. */
+data class ModelTestResult(val model: String, val failure: VerifyFailure?)
 
-    data class Passed(val model: String, override val failed: List<Pair<String, VerifyFailure>>) : VerifyOutcome
-    /** The provider answered, but no tested model works with DSH. */
-    data class NoModelWorked(override val failed: List<Pair<String, VerifyFailure>>) : VerifyOutcome
-    /** Key, network, address or server trouble: testing other models would not help. [failure] is the last entry of [failed]. */
-    data class Stopped(val failure: VerifyFailure, override val failed: List<Pair<String, VerifyFailure>>) : VerifyOutcome
+data class VerifyOutcome(val results: List<ModelTestResult>, val untested: List<String> = emptyList()) {
+    val passed: List<String> get() = results.filter { it.failure == null }.map { it.model }
+    val failed: List<Pair<String, VerifyFailure>> get() = results.mapNotNull { r -> r.failure?.let { r.model to it } }
+    val allPassed: Boolean get() = results.isNotEmpty() && failed.isEmpty() && untested.isEmpty()
 }
-
-/** Test [candidates] in order (at most [max]); the next one only after a model-specific failure. */
-fun verifyCandidates(candidates: List<String>, max: Int = 3, onTesting: (String) -> Unit = {}, probe: (String) -> VerifyFailure?): VerifyOutcome {
-    val failed = mutableListOf<Pair<String, VerifyFailure>>()
-    for (m in candidates.distinct().take(max)) {
-        onTesting(m)
-        val f = probe(m) ?: return VerifyOutcome.Passed(m, failed.toList())
-        failed += m to f
-        if (!f.modelSpecific) return VerifyOutcome.Stopped(f, failed.toList())
-    }
-    return VerifyOutcome.NoModelWorked(failed.toList())
-}
-
-/** What 测试 does with an outcome: the editor's models and verified set, and the model a 保存 makes the main one. */
-data class TestPlan(val apply: Boolean, val models: List<String>, val verified: List<String>, val main: String?)
 
 /**
- * [checked]: the models the user ticked, in display order; [previouslyVerified]: the editor's
- * verified set before the test; [makeMain]: a passing model becomes the main model on save (a new
- * provider, or one that already is the main route).
- * - Passed: the passing model is ticked (and is the only model when nothing was ticked).
- * - NoModelWorked: the provider answers, no main model; with nothing ticked the tested models are
- *   ticked so the user can see them and pick or retest.
- * - Stopped: the editor is left as it was.
- * Nothing is stored: 保存 is a separate action (#59), see [verifiedOnSave].
+ * Test every selected model, including manually entered ids, without ranking or a first-success cutoff.
+ * A provider-wide failure stops further requests; the rest are explicitly reported as untested.
  */
-fun planTest(outcome: VerifyOutcome, checked: List<String>, previouslyVerified: List<String>, makeMain: Boolean): TestPlan {
-    val failedIds = outcome.failed.map { it.first }.toSet()
-    return when (outcome) {
-        is VerifyOutcome.Passed -> {
-            val models = (checked + outcome.model).distinct()
-            TestPlan(true, models, (previouslyVerified.filter { it in models && it !in failedIds } + outcome.model).distinct(), outcome.model.takeIf { makeMain })
-        }
-        is VerifyOutcome.NoModelWorked -> {
-            val models = checked.ifEmpty { outcome.failed.map { it.first } }
-            TestPlan(true, models, previouslyVerified.filter { it in models && it !in failedIds }, null)
-        }
-        is VerifyOutcome.Stopped -> TestPlan(false, checked, previouslyVerified, null)
+fun verifyCandidates(candidates: List<String>, onTesting: (String) -> Unit = {}, probe: (String) -> VerifyFailure?): VerifyOutcome {
+    val models = candidates.filter { it.isNotBlank() }.distinct()
+    val results = mutableListOf<ModelTestResult>()
+    for ((index, model) in models.withIndex()) {
+        onTesting(model)
+        val failure = probe(model)
+        results += ModelTestResult(model, failure)
+        if (failure != null && !failure.modelSpecific) return VerifyOutcome(results.toList(), models.drop(index + 1))
     }
+    return VerifyOutcome(results.toList())
+}
+
+/** A test never changes the selection; only models that actually passed may be verified or made default. */
+data class TestPlan(val models: List<String>, val verified: List<String>, val main: String?)
+
+fun planTest(outcome: VerifyOutcome, checked: List<String>, previouslyVerified: List<String>, makeMain: Boolean): TestPlan {
+    val models = checked.distinct()
+    val passed = outcome.passed.filter { it in models }
+    val failed = outcome.failed.map { it.first }.toSet()
+    val verified = models.filter { it in passed || (it in previouslyVerified && it !in failed) }
+    return TestPlan(models, verified, passed.firstOrNull().takeIf { makeMain })
 }
 
 /** What a test result is valid for: protocol, base URL and the typed key (blank = the stored one). */

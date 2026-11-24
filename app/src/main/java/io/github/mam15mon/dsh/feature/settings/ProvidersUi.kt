@@ -69,7 +69,6 @@ import io.github.mam15mon.dsh.core.provider.endpointKey
 import io.github.mam15mon.dsh.core.provider.normalizeBaseUrl
 import io.github.mam15mon.dsh.core.provider.planTest
 import io.github.mam15mon.dsh.core.provider.verifiedOnSave
-import io.github.mam15mon.dsh.core.provider.rankCandidates
 import io.github.mam15mon.dsh.core.provider.LimitSource
 import io.github.mam15mon.dsh.core.provider.ModelLimits
 import io.github.mam15mon.dsh.core.provider.ModelReasoning
@@ -310,45 +309,34 @@ private fun ProviderEditor(vm: SettingsViewModel, existing: ProviderConfig?, pre
         missing.clear(); missing.addAll(r.missing)
     }
 
-    /**
-     * 测试: list the models, then one real chat request with a tool per candidate (ModelVerify.kt).
-     * Nothing is stored (#59: 保存 is its own action): a passing model is ticked and counts as
-     * verified when the provider is saved with the same protocol, address and key.
-     */
+    /** Test a snapshot of the checked ids; listing and testing are separate user actions. */
     suspend fun runTest() {
         result = null
+        val checked = offered.filter { it in selected }.distinct()
+        if (checked.isEmpty()) {
+            result = false to context.getString(R.string.prov_test_select_models)
+            return
+        }
         baseUrl = normalizeBaseUrl(baseUrl)
-        testing = context.getString(R.string.prov_testing_list)
-        val listing = vm.fetchModels(baseUrl, key, current, headerRows.toList(), sessionHeaderOrNull(), preset.workbuddy)
-        listing.onSuccess(::applyListing)
-        listing.exceptionOrNull()?.let { t ->
-            val f = VerifyErrors.ofThrowable(t)
-            // Anything but a bad key or no connection: the provider may just not offer /models; the real call decides.
-            if (f is VerifyFailure.KeyInvalid || f is VerifyFailure.Network) {
-                testing = null; result = false to context.getString(R.string.prov_test_stopped, describeFailure(context, f)); return
-            }
-        }
-        val listed = listing.getOrNull()?.models
-        val ticked = offered.filter { it in selected }
-        // A new provider's preset suggestion is pre-ticked, not chosen: with a listing, rank everything (the suggestion still leads).
-        val checked = if (existing == null && listed != null && ticked.toSet() == preset.models.toSet()) emptyList() else ticked
-        val main = s.choice.takeIf { current != null && it.provider?.id == current.id }?.model?.takeIf { checked.isEmpty() || it in checked }
-        val candidates = rankCandidates(listed.orEmpty(), presetOf(preset.id), main, checked)
-        if (candidates.isEmpty()) {
-            testing = null; result = false to context.getString(if (listed == null) R.string.prov_test_need_model else R.string.prov_test_no_chat_model); return
-        }
         val base = baseUrl
-        val endpoint = endpointKey(api, base, key)
-        val outcome = vm.verifyModels(base, key, current, candidates, { m -> testing = context.getString(R.string.prov_testing_model, m) }, headerRows.toList(), sessionHeaderOrNull(), api, preset.workbuddy)
+        val testApi = api
+        val testKey = key
+        val endpoint = endpointKey(testApi, base, testKey)
+        testing = context.getString(R.string.prov_testing_model, checked.first())
+        val outcome = vm.verifyModels(base, testKey, current, checked,
+            { m -> testing = context.getString(R.string.prov_testing_model, m) },
+            headerRows.toList(), sessionHeaderOrNull(), testApi, preset.workbuddy)
         testing = null
-        val plan = planTest(outcome, checked, verified.toList().takeIf { verifiedFor == endpoint }.orEmpty(),
+        // The editor remains editable while a request runs. Results belong to the original
+        // endpoint and ids, and cannot verify a different address, key or newly checked model.
+        val stillChecked = offered.filter { it in selected }
+        val plan = planTest(outcome, stillChecked, verified.toList().takeIf { verifiedFor == endpoint }.orEmpty(),
             makeMain = existing == null || s.choice.provider?.id == current?.id)
-        if (plan.apply) {
-            plan.models.forEach { if (it !in offered) offered.add(it); if (it !in selected) selected.add(it) }
+        if (endpointKey(api, baseUrl, key) == endpoint) {
             verified.clear(); verified.addAll(plan.verified); verifiedFor = endpoint
             pendingMain = plan.main
         }
-        result = (outcome is VerifyOutcome.Passed) to describeOutcome(context, outcome, becameMain = plan.main != null)
+        result = outcome.allPassed to describeOutcome(context, outcome, becameMain = plan.main != null && endpointKey(api, baseUrl, key) == endpoint)
     }
 
     /** 保存 without testing (#59): the editor as it stands; models keep their test state only for an unchanged endpoint. */
@@ -560,7 +548,7 @@ private fun ProviderEditor(vm: SettingsViewModel, existing: ProviderConfig?, pre
         if (current != null) DButton(stringResource(R.string.prov_delete), { vm.deleteProvider(current); onDone() }, variant = BtnVariant.Danger, size = BtnSize.Sm)
         Spacer(Modifier.weight(1f))
         DButton(stringResource(R.string.cancel), onDone, variant = BtnVariant.Outline, size = BtnSize.Sm)
-        DButton(stringResource(R.string.prov_test), {
+        DButton(stringResource(R.string.prov_test_selected), {
             error = inputError()
             if (error == null) scope.launch { runTest() }
         }, variant = BtnVariant.Outline, size = BtnSize.Sm, enabled = testing == null)

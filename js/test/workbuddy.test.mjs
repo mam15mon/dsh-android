@@ -284,7 +284,7 @@ test('probe sends the connection check through the signing fetch and hands back 
     assert.equal(sent.headers['x-api-key'], 'ck_0123456789abcdef')
     const body = JSON.parse(sent.body)
     assert.equal(body.model, 'glm-5.3'); assert.equal(body.stream, true); assert.equal(body.tools[0].function.name, 'dsh_connection_check')
-    assert.equal(body.tool_choice.function.name, 'dsh_connection_check')
+    assert.equal(body.tool_choice, 'dsh_connection_check')
     await assert.rejects(client.probe('workbuddy', { key: 'k' }), /requires a model/)
   } finally { await g.close() }
 })
@@ -391,7 +391,8 @@ test('accounts: a restricted account rests a day, an account out of credits an h
     seedMany(dir, [acct('u-a', 'A'), acct('u-b', 'B')])
     const res = await chatAs(g2, createClient({ dir, sites: g2.sites }))
     assert.equal(res.status, 400)
-    assert.equal(usedBy(g2).length, 1, 'a refused prompt is no account\'s fault: one try')
+    assert.equal(new Set(usedBy(g2)).size, 1, 'compatibility retries must stay on the same account')
+    assert.equal(usedBy(g2).length, 2, 'one original attempt plus the bounded system-prompt adaptation')
   } finally { await g2.close() }
 })
 

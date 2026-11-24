@@ -19,7 +19,8 @@
 //   workbuddy/probe        {site, key?, model, forceTool?} → { status, body }   (the connection test's chat, SSE text)
 // Notification (engine → app): workbuddy.changed {site, state} when a sign-in attempt settles.
 import { join } from 'node:path'
-import { createClient } from './core.js'
+import { createClient, probeSystemFor } from './core.js'
+import { systemPromptSection } from '@dsh-android/plugin-guard'
 
 export const name = 'android-workbuddy'
 
@@ -36,6 +37,7 @@ export function apply(ctx, config = {}) {
   const client = createClient({
     dir,
     fetch: real,
+    probeSystem: model => `${probeSystemFor(model)}\n\n${systemPromptSection(process.env.DSH_ANDROID_LOCALE)}`,
     log: m => log('warn', m),
     onChange: site => notify('workbuddy.changed', { site, state: client.state(site) }),
   })

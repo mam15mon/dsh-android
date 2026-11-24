@@ -966,4 +966,9 @@
     <string name="cloud_voice_transcribing">Transcribing online…</string>
     <string name="cloud_voice_check_config">Doubao rejected the request. Tap to check your API key and service activation.</string>
     <string name="cloud_voice_service_failed">The speech service could not transcribe. Tap to record again.</string>
+    <string name="prov_test_selected">Test selected models</string>
+    <string name="prov_test_select_models">Select the models to test first. If you typed a model ID, tap Add.</string>
+    <string name="prov_test_model_failed">Failed: %1$s — %2$s</string>
+    <string name="prov_test_model_skipped">Not tested: %1$s (a key, network or service error stopped the remaining tests).</string>
+    <string name="prov_test_default">Saving will set %1$s as the default model.</string>
 </resources>

@@ -12,6 +12,7 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
+import { createChatCompatibility, explainResponse } from './compatibility.js'
 
 export const POLL_MS = 1000
 export const SIGN_IN_MS = 5 * 60 * 1000
@@ -393,8 +394,18 @@ export const accountId = a => `${a.uid ?? ''}|${a.enterpriseId ?? ''}`
  * signs chats and moves on to the next account when one is turned away. [sites], [fetch], [now] and the timings are
  * injectable for tests.
  */
-export function createClient({ dir, sites = SITES, fetch = globalThis.fetch, now = () => Date.now(), pollMs = POLL_MS, signInMs = SIGN_IN_MS, onChange = () => {}, log = () => {} } = {}) {
+/** The same harness identity and Android persona used in real chats, not a generic test-only system prompt. */
+export function probeSystemFor(model) {
+  return `You are an AI agent powered by DeepSeek Harness.
+
+You are DSH, an AI agent running on the user's own Android phone, powered by the ${model} model.`
+}
+
+export function createClient({ dir, sites = SITES, fetch = globalThis.fetch, now = () => Date.now(), pollMs = POLL_MS, signInMs = SIGN_IN_MS, onChange = () => {}, log = () => {},
+  probeSystem = probeSystemFor,
+} = {}) {
   const fileOf = site => join(dir, `${site.id}.json`)
+  const compatibility = createChatCompatibility()
   const modelsFileOf = site => join(dir, `${site.id}.models.json`)
   const siteOf = id => { const s = sites[id]; if (!s) throw new TypeError(`unknown WorkBuddy site "${id}"`); return s }
 
@@ -666,7 +677,7 @@ export function createClient({ dir, sites = SITES, fetch = globalThis.fetch, now
     const body = JSON.stringify({
       model, stream: true, max_tokens: 1024,
       messages: [
-        { role: 'system', content: `This is a connection check. Call the ${tool} tool once. Do not reply with text.` },
+        { role: 'system', content: `${await probeSystem(model)}\n\nThis is a connection check. Call the ${tool} tool once. Do not reply with text.` },
         { role: 'user', content: `Call ${tool} now.` },
       ],
       tools: [{ type: 'function', function: { name: tool, description: 'Confirms that tool calls work. Takes no arguments.', parameters: { type: 'object', properties: {}, required: [] } } }],
@@ -693,15 +704,17 @@ export function createClient({ dir, sites = SITES, fetch = globalThis.fetch, now
       const bearer = /^Bearer\s+(.+)$/i.exec(headers.get('authorization') ?? '')?.[1]
       let chat
       try { chat = JSON.parse(init.body) } catch { chat = undefined }
-      let body = init.body
-      if (chat && typeof chat === 'object') {
-        const changed = [fixChat(chat), applyEffort(chat, readModelInfo(site)[chat.model])]
-        if (changed.some(Boolean)) body = JSON.stringify(chat)
+      let prepared
+      if (chat && typeof chat === 'object' && !Array.isArray(chat)) {
+        fixChat(chat)
+        applyEffort(chat, readModelInfo(site)[chat.model])
+        prepared = compatibility.prepare(chat, site.id)
       }
       const send = (a) => {
         const h = new Headers(headers)
         sign(site, a, h, { chat: true })
-        return real(input, { ...init, headers: h, body })
+        const post = body => real(input, { ...init, headers: h, body })
+        return prepared ? compatibility.send(prepared, post) : post(init.body)
       }
       const kacc = keyAccount(bearer)
       if (kacc) return answered(site, await send(kacc))
@@ -729,7 +742,7 @@ export function createClient({ dir, sites = SITES, fetch = globalThis.fetch, now
         }
         const text = await res.text()
         const why = turnedAway(res.status, text)
-        if (!why) return new Response(text, { status: res.status, statusText: res.statusText, headers: res.headers })
+        if (!why) return explainResponse(new Response(text, { status: res.status, statusText: res.statusText, headers: res.headers }))
         rest(site, picked.id, REST_MS[why], why)
         log(`${picked.name ?? picked.id}: ${why} (HTTP ${res.status}); trying the next account`)
         last = refusal(res.status, why === 'restricted' ? `${RESTRICTED_HINT}. ${text.slice(0, 300)}` : text.slice(0, 500), text)
@@ -742,7 +755,7 @@ export function createClient({ dir, sites = SITES, fetch = globalThis.fetch, now
     if (res.ok) return res
     const text = await res.text()
     if (isRestricted(res.status, text)) return refusal(res.status, `${RESTRICTED_HINT}. ${text.slice(0, 300)}`)
-    return new Response(text, { status: res.status, statusText: res.statusText, headers: res.headers })
+    return explainResponse(new Response(text, { status: res.status, statusText: res.statusText, headers: res.headers }))
   }
 
   return { SITES: sites, state, usage, models, probe, signInStart, signInCancel, signOut, wrapFetch, load, pick, account: async (id, opts) => { const site = siteOf(id); const a = pick(site); return a ? fresh(site, a, opts) : undefined } }

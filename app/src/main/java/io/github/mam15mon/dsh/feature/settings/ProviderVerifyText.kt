@@ -19,15 +19,13 @@ fun describeFailure(context: Context, f: VerifyFailure): String = when (f) {
     is VerifyFailure.Server -> if (f.status in 100..599) context.getString(R.string.verify_server, f.status, f.message) else context.getString(R.string.verify_bad_response, f.message)
 }
 
-/** The 测试 result: what happened, which model became the main one, and why earlier candidates failed. */
+/** Every requested model names its own result; skipped requests cannot look like successes. */
 fun describeOutcome(context: Context, outcome: VerifyOutcome, becameMain: Boolean): String {
-    val earlier = outcome.failed.filter { outcome !is VerifyOutcome.Stopped || it.second !== outcome.failure }
-    return when (outcome) {
-        is VerifyOutcome.Passed -> (listOf(context.getString(if (becameMain) R.string.prov_test_ok_main else R.string.prov_test_ok, outcome.model)) +
-            earlier.map { (m, f) -> context.getString(R.string.prov_test_earlier, m, describeFailure(context, f)) }).joinToString("\n")
-        is VerifyOutcome.NoModelWorked -> (listOf(context.getString(R.string.prov_test_none)) +
-            outcome.failed.map { (m, f) -> "· $m — " + describeFailure(context, f) }).joinToString("\n")
-        is VerifyOutcome.Stopped -> (listOf(context.getString(R.string.prov_test_stopped, describeFailure(context, outcome.failure))) +
-            earlier.map { (m, f) -> context.getString(R.string.prov_test_earlier, m, describeFailure(context, f)) }).joinToString("\n")
-    }
+    val lines = outcome.results.map { (model, failure) ->
+        if (failure == null) context.getString(R.string.prov_test_ok, model)
+        else context.getString(R.string.prov_test_model_failed, model, describeFailure(context, failure))
+    }.toMutableList()
+    outcome.untested.forEach { lines += context.getString(R.string.prov_test_model_skipped, it) }
+    if (becameMain) outcome.passed.firstOrNull()?.let { lines += context.getString(R.string.prov_test_default, it) }
+    return lines.joinToString("\n")
 }
