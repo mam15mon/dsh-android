@@ -1,7 +1,7 @@
 {
   "name": "DSH 安卓",
   "package": "com.dsh.android",
-  "versionName": "0.5.5",
-  "versionCode": 105,
+  "versionName": "0.5.6",
+  "versionCode": 106,
   "repository": "mam15mon/dsh-android"
 }
