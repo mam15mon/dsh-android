@@ -107,6 +107,9 @@ fun ChatStream(
     val lastIndex = conv.turns.size + live.steers.size
     val tailKey = conv.turns.lastOrNull()?.let { it.blocks.size to it.status } to (live.running to live.steers.size)
     LaunchedEffect(tailKey, live.sessionId) { if (follow && lastIndex >= 0) listState.scrollToItem(lastIndex, Int.MAX_VALUE / 2) }
+    // The viewport shrinks/grows when the IME opens/closes (imePadding on the dock): keep the tail in view while following.
+    val viewportHeight by remember { derivedStateOf { listState.layoutInfo.let { it.viewportEndOffset - it.viewportStartOffset } } }
+    LaunchedEffect(viewportHeight) { if (follow && lastIndex >= 0) listState.scrollToItem(lastIndex, Int.MAX_VALUE / 2) }
 
     Box(modifier) {
         LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp)) {
