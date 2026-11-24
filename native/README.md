@@ -18,6 +18,10 @@ Node's `require-builtin` addon is not built: the engine runs with `--expose-inte
 
 Gradle packages the ARM64 libraries under `app/src/main/jniLibs/arm64-v8a/`. When updating the prebuilt inputs, copy the verified outputs into that directory. The workspace helper `libdshworkspace.so` comes from `tools/root-workspace.c`.
 
+The JNI wrapper targets `io.github.mam15mon.dsh.engine.NodeRuntime`. A namespace change requires
+rebuilding and copying `libdshengine.so` as well as updating the Kotlin class; `libnode.so` is reusable.
+`prebuilt.sh` uses `mam15mon/dsh-android` for this fork's input-keyed releases (`GH_REPO` overrides it).
+
 After building a signed APK, run `python tools/verify-native-alignment.py app/build/outputs/apk/release/app-release.apk` to verify the packaged ELF and ZIP alignment.
 
 ## Building from source
@@ -129,7 +133,7 @@ Skipped Termux patches:
 ## JNI wrapper (`engine-jni/dshengine.cc`)
 
 ```
-JNIEXPORT jint JNICALL Java_io_github_jackwener_dsh_engine_NodeRuntime_nativeStart(
+JNIEXPORT jint JNICALL Java_io_github_mam15mon_dsh_engine_NodeRuntime_nativeStart(
     JNIEnv*, jclass, jobjectArray args, jint stdinFd, jint stdoutFd, jint stderrFd);
 JNIEXPORT jint JNI_OnLoad(JavaVM*, void*);   // returns JNI_VERSION_1_6
 ```

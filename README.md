@@ -4,6 +4,7 @@
 
 - 应用名：**DSH 安卓**
 - 包名：`com.dsh.android`
+- 源码命名空间：`io.github.mam15mon.dsh`
 - 当前版本：`0.5.5`，内置 DSH `0.2.2-rc.5`
 - 支持 Android 10 及以上、ARM64 手机。
 - 长按桌面应用图标，选择 **开始对话**，直接打开桌宠使用的快捷对话窗口。
@@ -30,6 +31,8 @@ Windows 用 `.\gradlew.bat assembleRelease`。APK 产物位于 `app/build/output
 正式签名时，设置 `DSH_ANDROID_KEYSTORE`（原密钥库绝对路径）和 `DSH_ANDROID_STORE_PASSWORD`（密钥库口令）。签名别名为 `dsh_android`，密钥与密钥库使用同一口令。两项均未设置时 Gradle 产出未签名的 APK。GitHub Actions 使用 `DSH_ANDROID_KEYSTORE_B64` 和 `DSH_ANDROID_STORE_PASSWORD`，并验证签名及 16 KB 对齐。
 
 维护运行时时，可按 [JS 引擎构建](js/README.md) 和 [原生库构建](native/README.md) 更新仓库内的预制文件。
+
+从旧代码命名空间升级后，应用数据和安装包 ID 保持不变；无障碍服务、默认助手和快捷设置磁贴的组件类名已变更，需要重新启用或选择。已有桌面快捷入口若失效，删除后重新添加。
 
 ## 源码与授权
 

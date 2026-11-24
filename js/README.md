@@ -16,7 +16,7 @@ DeepSeek Harness (dsh) **0.2.1-rc.5**, installed unmodified from npm and customi
 | `packages/plugin-mode/` | session modes: per-conversation tool restriction, skills switch, mode prompt section (`android/session/mode`, ENGINE-CONTRACT §2.5); deferred tools: catalog section + `load_tools` (`deferred.js`, §2.5.1) |
 | `packages/plugin-account/` | DeepSeek account login: loopback OAuth callback server + `account/*` SDK methods |
 | `packages/plugin-workbuddy/` | WorkBuddy (Tencent CodeBuddy) routes: a `fetch` wrapper that signs the chats (client headers, refreshed token / API key, request spellings, prompt lines the gateway refuses) and the `workbuddy/*` SDK methods (browser sign-in, `/v3/config` model list, connection test); ENGINE-CONTRACT §2.8 |
-| `packages/llm-service-lite/` | vendored `@snnh/dsh-llm-service-lite` 0.2.1 (MIT, snnh): third-party OpenAI-compatible model routes; built `lib/index.js` copied verbatim from the npm tarball (provenance in its `package.json` `//vendored`), Web client dropped. Upgrade = replace `lib/index.js` + note; changes go in `patches/` (14, 16, 17, 18, 22, 28); upstreaming notes in [`patches/UPSTREAM.md`](patches/UPSTREAM.md) |
+| `packages/llm-service-lite/` | vendored `@snnh/dsh-llm-service-lite` 0.2.1 (MIT, snnh): third-party OpenAI-compatible model routes; built `lib/index.js` copied verbatim from the npm tarball (provenance in its `package.json` `//vendored`), Web client dropped. Upgrade = replace `lib/index.js` + note; changes go in `patches/` (14, 16, 17, 18, 22, 28, 29); upstreaming notes in [`patches/UPSTREAM.md`](patches/UPSTREAM.md) |
 | `patches/*.patch` | unified diffs against `node_modules/`, applied in order with `patch -p1` (dry-run first) |
 | `scripts/fetch-locked.mjs` | installs lockfile-pinned packages `npm ci` skips on the host (sharp's WebAssembly build), sha512-verified |
 | `scripts/unreachable.mjs` | lists packages reachable only through given deps (used to prune pi-ai's provider SDKs) |
@@ -31,6 +31,7 @@ DeepSeek Harness (dsh) **0.2.1-rc.5**, installed unmodified from npm and customi
 | `test/mode.test.mjs` | plugin-mode unit tests (categories, payload validation, restriction / guard / record on a fake context; deferred tools: catalog, `load_tools`, loaded set across subagents and resume, stable prompt): `node --test js/test/mode.test.mjs` |
 | `test/provider-network.test.mjs` | patches 14/15 against a built stage tree: `DSH_STAGE_NM=<WORK_DIR>/stage/node_modules node --test js/test/provider-network.test.mjs` |
 | `test/provider-protocol.test.mjs` | patch 16 end to end: the real adapter against synthetic `node:http` SSE servers (`usage: null` frames, malformed JSON, bare-origin 404, refused port); an `openai-responses` route as the app writes it (#59: `/v1/responses`, flat tools, `reasoning.effort` per level, text + tool call + usage, `includeUsage` refused there); same `DSH_STAGE_NM` |
+| `test/openai-responses.test.mjs` | patch 29: stateless Responses requests, encrypted reasoning with and without a visible summary, tool-result replay, distinct commentary/final-answer messages, model-switch isolation, and unchanged Chat Completions requests; same `DSH_STAGE_NM`, no live API calls |
 | `test/provider-headers.test.mjs` | patch 18 route headers against a fake OpenCode-Go-like server that refuses a chat without `x-opencode-session`: session id stable across two turns of a session, different across sessions / routes, fresh without a session and for listings; static / secret (`headerEnv`) headers; User-Agent token; same `DSH_STAGE_NM` |
 | `test/provider-reasoning.test.mjs` | reasoning levels for third-party models (#46, patch 22, plugin-guard `android/models/reasoning`): the real adapter against a fake chat endpoint records the request fields per chosen level for a `reasoning_effort` family (Kimi K3), an `enable_thinking` family (Qwen 3.5+) and profile-declared models (effort levels, `enable_thinking` / `thinking.type` switch, no control), and that no level adds nothing beyond the family default; then the real engine with the app's patch layer: levels before `initialize`, a level through `initialize` onto the wire, an unsupported level refused; same `DSH_STAGE_NM` |
 | `test/gateway-replay.test.mjs` | recorded gateway compatibility suite (patches 14/16/17/18): every `test/fixtures/gateways/<case>.expect.json` replays one raw response body (SSE, JSON completion or error) of a provider (DeepSeek live captures; OpenAI, vLLM, SGLang, NVIDIA NIM, OpenRouter, Ollama, LM Studio, SiliconFlow, Volcano Ark, Moonshot, Zhipu, DashScope, Mistral, MiniMax, Gemini, Azure, magpie-style gateway from their documented formats) through the real adapter and checks text, reasoning, tool calls, usage, finish reason or error code, then the thinking echo on the follow-up request. Add a case = one body + one expectation file ([format](test/fixtures/gateways/README.md)); same `DSH_STAGE_NM` |
@@ -57,6 +58,9 @@ TMPDIR_OVERRIDE="$WORK_DIR/tmp" bash js/build-engine.sh
 ```
 
 Paths are relative to the repo root; `toolchains/` is gitignored.
+
+Patch 29 and its Responses tests adapt [upstream PR #31](https://github.com/jackwener/DSH-Android/pull/31)
+by vmoeak, with additional coverage and handling for multiple assistant message phases in one response.
 
 | Env | Default | |
 |---|---|---|

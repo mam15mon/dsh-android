@@ -108,6 +108,13 @@ Protocol (#59): `interfaceType` is the provider's `api`, `openai-chat-completion
 `includeUsage: true` is written for Chat Completions only (Responses reports usage itself and the adapter refuses the
 flag there). On Responses the adapter sends a level as `reasoning: {effort, summary: "auto"}`; it has no thinking switch,
 so the editor offers 自动 / 无 / 推理档位 only.
+Responses routes also set `extraBody: {"store":false}` and each model's
+`capabilities.responsesEncryptedReplay: true`. Patch 29 retains encrypted-only reasoning items and
+each assistant message's id and `phase` when replaying history after a tool result or into the next turn.
+Commentary and final-answer items stay separate. Replay metadata is used only on the same provider/model.
+Function definitions explicitly use `strict: false`, matching the app's existing optional tool arguments;
+the connection probe uses the same non-strict, non-storing request settings. Protocol selection remains
+explicit or uses the editor's automatic detection; a hostname does not override a saved protocol choice.
 
 Provider headers (js patch 18; 设置 → 模型服务 → 高级设置, the OpenCode Go preset): `"headers":{name:value}` for
 plain extra headers, `"headerEnv":{name:"DSH_ANDROID_HDR_…"}` for secret ones (a name containing key / token /

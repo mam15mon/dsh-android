@@ -1,6 +1,7 @@
 # AGENTS.md
 
 DSH 安卓：原生 Android 客户端（Kotlin / Compose + Android 原生 Node.js + DSH 引擎）。包名 `com.dsh.android`，仓库 `mam15mon/dsh-android`，版本号在 `client.json`。
+源码、AIDL 和测试命名空间为 `io.github.mam15mon.dsh`；JNI 符号和预编译 `libdshengine.so` 必须与 `engine.NodeRuntime` 的完整类名一致。
 
 ## 构建
 

@@ -172,7 +172,7 @@
                 <data android:mimeType="*/*" />
             </intent-filter>
             <intent-filter>
-                <action android:name="io.github.jackwener.dsh.RUN_TASK" />
+                <action android:name="io.github.mam15mon.dsh.RUN_TASK" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
@@ -290,7 +290,7 @@
             android:exported="true"
             android:multiprocess="false"
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
-        <activity android:name="io.github.jackwener.dsh.nativeextra.NativeRootActivity" android:exported="false" />
+        <activity android:name="io.github.mam15mon.dsh.nativeextra.NativeRootActivity" android:exported="false" />
         <activity android:name=".feature.voice.CloudVoiceSettingsActivity" android:exported="false" />
     </application>
 </manifest>

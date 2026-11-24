@@ -32,7 +32,7 @@ def resource_value(name):
     return match.group(1)
 
 shortcut = subprocess.check_output([aapt, "dump", "xmltree", str(apk), resource_value("xml/shortcuts")]).decode("utf-8")
-if '"start_conversation"' not in shortcut or f'"{client["package"]}"' not in shortcut or '"io.github.jackwener.dsh.feature.quick.QuickActivity"' not in shortcut:
+if '"start_conversation"' not in shortcut or f'"{client["package"]}"' not in shortcut or '"io.github.mam15mon.dsh.feature.quick.QuickActivity"' not in shortcut:
     raise RuntimeError("Start-conversation shortcut targets the wrong activity")
 with ZipFile(apk) as z:
     if resource_value("drawable/dsh_launcher_foreground") not in z.namelist():

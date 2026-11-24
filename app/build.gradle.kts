@@ -18,14 +18,14 @@ check(releaseKeystore.isNullOrBlank() == releasePassword.isNullOrBlank()) {
 }
 
 android {
-    namespace = "io.github.jackwener.dsh"
+    namespace = "io.github.mam15mon.dsh"
     compileSdk {
         version = release(37) { minorApiLevel = 2 }
     }
 
     defaultConfig {
         applicationId = client["package"] as String
-        testInstrumentationRunner = "io.github.jackwener.dsh.nativeextra.PhoneBackendTest"
+        testInstrumentationRunner = "io.github.mam15mon.dsh.nativeextra.PhoneBackendTest"
         minSdk = 29
         targetSdk = 36
         versionCode = client["versionCode"] as Int

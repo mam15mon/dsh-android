@@ -2,7 +2,7 @@
 
 DSH-Android 把 DeepSeek Harness（dsh）跑在手机上：Node 24 编译成 bionic 共享库 `libnode.so`，通过 JNI 在独立的 `:engine` 进程里启动 dsh；设备能力全部由 Kotlin 实现，经一条私有 socket 暴露给 dsh。协议细节见 [ENGINE-CONTRACT.md](ENGINE-CONTRACT.md)，引擎包见 [js/README.md](../js/README.md)，原生构建见 [native/README.md](../native/README.md)。
 
-代码路径相对 `app/src/main/java/io/github/jackwener/dsh/`。
+代码路径相对 `app/src/main/java/io/github/mam15mon/dsh/`。
 
 ## 进程模型
 
@@ -128,7 +128,7 @@ Shizuku 用户服务（shell uid，可选）：ShellUserService
 - 系统助手：`DshVoiceInteractionService` 从 `AssistStructure` 取得当前屏幕内容（长按电源键或手势唤起）。DSH 没有语音识别，`DshRecognitionService` 只是为了能被选为助手。
 - 快捷设置磁贴 `QuickTileService`。
 - 分享：`SEND`/`SEND_MULTIPLE`，文字、图片和文件放进输入框，由用户确认后发送。
-- `io.github.jackwener.dsh.RUN_TASK`（extra `task`）：受“允许其他 App 调用”开关控制，默认关闭，关闭时提示并拒绝；不附带屏幕内容。
+- `io.github.mam15mon.dsh.RUN_TASK`（extra `task`）：受“允许其他 App 调用”开关控制，默认关闭，关闭时提示并拒绝；不附带屏幕内容。
 
 面板顶部显示“当前页面”标签，可以取消附带。
 
@@ -150,7 +150,7 @@ dsh-base 自带 DeepSeek 账号 provider（OAuth + PKCE，凭据存在 `DSH_HOME
 除 DeepSeek（API key / 账号登录，路由 `deepseek-official` / `deepseek-account`，不变）外，可以添加 OpenAI 兼容的服务商。设计取舍：
 
 - **引擎**：不重开 `llm-pi-ai`（它会带回数十 MB 厂商 SDK 和约 500 个启动模块），而是挂载 vendored 的 [`@snnh/dsh-llm-service-lite`](https://github.com/snnh/dsh-llm-service-lite) 0.2.1（MIT，为 dsh 0.2.1-rc.2 编写，在 rc.5 上运行；`js/packages/llm-service-lite/` 里原样保存其构建产物 `lib/index.js`，去掉 Web 配置界面）。没有服务商时这一行休眠，不注册任何路由。
-- **协议**：默认 OpenAI Chat Completions（`openai-chat-completions`），国内外主流厂商都提供这个兼容接口。OpenAI、Ollama、LM Studio 和自定义服务商可以改选 OpenAI Responses（`openai-responses`，#59，请求发到 `{baseURL}/responses`；引擎的适配器原生支持，App 只写 `interfaceType`，不写 `includeUsage`）。地址里贴进来的 `/chat/completions`、`/responses` 后缀保存时去掉（`normalizeBaseUrl`）。
+- **协议**：默认 OpenAI Chat Completions（`openai-chat-completions`），国内外主流厂商都提供这个兼容接口。OpenAI、Ollama、LM Studio 和自定义服务商可以改选 OpenAI Responses（`openai-responses`，#59，请求发到 `{baseURL}/responses`；也可自动识别）。Responses 不写 `includeUsage`，使用 `store: false`，保留加密推理状态和各条助手消息的 `phase` 供后续请求回传（patch 29），工具参数显式按非严格 schema 处理。地址里贴进来的 `/chat/completions`、`/responses` 后缀保存时去掉（`normalizeBaseUrl`）。
 - **预设**（`PRESETS`，一行一个）：OpenAI、Anthropic、Gemini、xAI、OpenRouter、Kimi、智谱、通义千问、火山方舟、MiniMax、硅基流动、阶跃星辰，以及“自定义（OpenAI 兼容）”。地址参考 [magpie](https://github.com/yetone/magpie) 的 `internal/provider/presets.go`（MIT），只取各家的 OpenAI 兼容地址；默认模型 ID 只是起点。仅支持 HTTPS（`network_security_config` 不变）。
 - **配置下发**：App 在每次启动引擎前生成设置层 `$DSH_HOME/android/app-layer.patch.yml`（`renderProfilePatch`，契约 §1.1；引擎入口把它作为 `--patch` 覆盖层，profile 自己的 `cordis.patch.yml` 归 dsh 的插件管理和配置编辑，见 PLUGINS-CONTRACT.md），里面只有 `apiKeyEnv` 名字，没有密钥。每个服务商是一条路由（路由 ID = 预设 ID，重复时加 `-2`…）。
 - **密钥**：`SecretStore` 的命名槽位（`provider-<路由 ID>`，与 DeepSeek key 同一个 Keystore AES-GCM 密钥，`noBackupFilesDir`），启动引擎时作为 `DSH_ANDROID_KEY_<ID>` 环境变量传入。设置里只存 `hasKey`。

@@ -5,6 +5,6 @@
         android:shortcutShortLabel="@string/shortcut_start_conversation">
         <intent android:action="android.intent.action.VIEW"
             android:targetPackage="com.dsh.android"
-            android:targetClass="io.github.jackwener.dsh.feature.quick.QuickActivity" />
+            android:targetClass="io.github.mam15mon.dsh.feature.quick.QuickActivity" />
     </shortcut>
 </shortcuts>
