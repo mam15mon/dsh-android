@@ -240,6 +240,9 @@ Defaults: `toolchains/out/engine/engine.zip` and `toolchains/out/engine-build/ho
 `E2E_MODEL`, `E2E_KEEP=1` (keep scratch).
 
 Host bindings are installed under their Android file names with `DSH_NATIVE_DIR` set, so the patched loaders run.
+`build-engine.sh` saves the matching Linux x86_64 or ARM64 flock binding in `host-native/` before
+pruning the staging tree. Real-engine tests need this directory as well as `DSH_STAGE_NM`; when
+using an extracted engine ZIP, set `DSH_NATIVE_DIR` to the build's `host-native/` directory.
 
 - **A**: boot without a bridge; profile self-initializes; cwd is `HOME`; the missing bridge is logged once.
 - **B**: a fake bridge on fd 3 with `file_list` (read), `file_write` (write) and `screen_capture` (read, needsUnlock);

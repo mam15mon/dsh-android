@@ -13,7 +13,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -135,7 +135,7 @@ test('android/models/reasoning: a route that cannot resolve answers its error; b
 
 // ── the real engine, through the SDK ─────────────────────────────────────────
 /** Newline-delimited JSON-RPC over a stream pair (client side; server requests get [onRequest]'s answer). */
-function rpcPeer(readable, writable, onRequest) {
+function rpcPeer(readable, writable, onRequest, onNotification = () => {}) {
   let buf = ''
   let id = 0
   const pending = new Map()
@@ -151,7 +151,9 @@ function rpcPeer(readable, writable, onRequest) {
         Promise.resolve().then(() => onRequest(m.method, m.params)).then(
           result => writable.write(JSON.stringify({ jsonrpc: '2.0', id: m.id, result }) + '\n'),
           error => writable.write(JSON.stringify({ jsonrpc: '2.0', id: m.id, error: { code: -32000, message: String(error?.message ?? error) } }) + '\n'))
-      } else if (m.method === undefined) {
+      } else if (m.method !== undefined) {
+        onNotification(m.method, m.params)
+      } else {
         const p = pending.get(m.id); pending.delete(m.id)
         if (p) m.error ? p.reject(Object.assign(new Error(m.error.message), m.error)) : p.resolve(m.result)
       }
@@ -161,6 +163,8 @@ function rpcPeer(readable, writable, onRequest) {
 }
 
 test('engine: android/models/reasoning before initialize, the chosen level on the wire, an unsupported level refused', { timeout: 180_000 }, async () => {
+  assert.ok(existsSync(join(NATIVE, 'libdsh_flock.so')),
+    `missing host flock binding in ${NATIVE}; rebuild with bash js/build-engine.sh or set DSH_NATIVE_DIR to the host-native directory`)
   const srv = await endpoint()
   const root = mkdtempSync(join(TMP, 'reasoning-'))
   const dshHome = join(root, 'dsh-home'), home = join(root, 'home'), tmp = join(root, 'tmp')
@@ -191,7 +195,10 @@ test('engine: android/models/reasoning before initialize, the chosen level on th
     if (method === 'experience/turn') return { reflect: false }
     throw new Error(`unexpected ${method}`)
   })
-  const sdk = rpcPeer(child.stdout, child.stdin, () => ({ outcome: 'allowed-once' }))
+  const events = []
+  const sdk = rpcPeer(child.stdout, child.stdin, () => ({ outcome: 'allowed-once' }), (method, params) => {
+    if (method === 'session.event') events.push(params)
+  })
   const until = (what, ms = 60_000) => Promise.race([what, sleep(ms, undefined, { ref: false }).then(() => { throw new Error(`timeout\n${stderr.slice(-2000)}`) })])
   const turn = async (model, reasoningEffort) => {
     await until(sdk.request('initialize', { cwd: home, provider: 'fake', model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }), approvalRequests: true }))
@@ -199,7 +206,9 @@ test('engine: android/models/reasoning before initialize, the chosen level on th
     const before = srv.bodies.length
     await until(sdk.request('session/prompt', { sessionId, contentBlocks: [{ type: 'text', text: 'hi' }] }))
     await until(sdk.request('session/wait', { sessionId }))
-    const body = srv.bodies.slice(before).find(b => Array.isArray(b.tools) && b.tools.length > 0) ?? srv.bodies.at(-1)
+    const requests = srv.bodies.slice(before)
+    assert.ok(requests.length > 0, `no model request for ${model}: ${JSON.stringify(events)}\n${stderr.slice(-4000)}`)
+    const body = requests.find(b => Array.isArray(b.tools) && b.tools.length > 0) ?? requests.at(-1)
     return Object.fromEntries(REASONING_FIELDS.filter(f => f in body).map(f => [f, body[f]]))
   }
   try {

@@ -80,11 +80,16 @@ log "adding @img/sharp-freebsd-wasm32 closure (lockfile-pinned, integrity-checke
 node "$JS_DIR/scripts/fetch-locked.mjs" "$STAGE/package-lock.json" "$NM" \
   @img/sharp-freebsd-wasm32 @img/sharp-wasm32 @emnapi/runtime tslib
 
-# ── 4. host-native test bindings (only used by test/host-e2e.mjs, never zipped) ─
+# ── 4. host-native test bindings (host engine tests only, never zipped) ───────
 rm -rf "${HOST_NATIVE:?}"
-if [[ "$(uname -s)-$(uname -m)" == "Linux-aarch64" ]]; then
+host_arch=""
+case "$(uname -s)-$(uname -m)" in
+  Linux-aarch64) host_arch=arm64 ;;
+  Linux-x86_64) host_arch=x64 ;;
+esac
+if [[ -n "$host_arch" ]]; then
   mkdir -p "$HOST_NATIVE"
-  cp "$NM/@deepseek-ai/node-addon-system-linux-arm64/bin/glibc/system.node" "$HOST_NATIVE/libdsh_flock.so"
+  cp "$NM/@deepseek-ai/node-addon-system-linux-$host_arch/bin/glibc/system.node" "$HOST_NATIVE/libdsh_flock.so"
   log "host test bindings -> $HOST_NATIVE"
 fi
 

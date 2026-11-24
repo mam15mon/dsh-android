@@ -7,8 +7,8 @@ import java.io.File
 
 /**
  * Pages never handle Back themselves: Back is the NavHost's popBackStack (BackNavigationTest). A
- * back handler is only allowed for transient layers that are not pages; anything else (a page
- * faked with local state) has to become a destination instead of joining this list.
+ * back handler is only allowed for transient layers, including pickers in the separate Root activity;
+ * anything else (a page faked with local state) has to become a destination instead of joining this list.
  */
 class BackHandlerAllowlistTest {
     private val allowed = mapOf(
@@ -16,6 +16,9 @@ class BackHandlerAllowlistTest {
         "feature/conversation/HomeScreen.kt" to 2,
         // In-WebView page history on the Platform screen (the screen itself is a destination).
         "feature/account/PlatformWebScreen.kt" to 1,
+        // Temporary project-folder and app-data pickers within NativeRootActivity (outside NavHost).
+        "nativeextra/NativeRootActivity.kt" to 1,
+        "nativeextra/AppDirectoryPicker.kt" to 1,
     )
     private val pattern = Regex("""\b(BackHandler|PredictiveBackHandler|NavigationEventHandler|OnBackPressedCallback|onBackPressedDispatcher|onBackPressed)\s*[({]""")
 

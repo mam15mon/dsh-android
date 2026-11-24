@@ -15,6 +15,9 @@ import io.github.jackwener.dsh.core.capability.tools.RuleTools
 import io.github.jackwener.dsh.core.capability.tools.ScreenTools
 import io.github.jackwener.dsh.core.capability.tools.SystemTools
 import io.github.jackwener.dsh.core.engine.RpcJson
+import io.github.jackwener.dsh.core.platform.ShizukuShell
+import io.github.jackwener.dsh.nativeextra.NativeRoot
+import io.github.jackwener.dsh.nativeextra.PhoneShell
 import kotlinx.serialization.json.JsonArray
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -36,7 +39,7 @@ import java.io.File
 @GraphicsMode(GraphicsMode.Mode.LEGACY)
 @SQLiteMode(SQLiteMode.Mode.LEGACY)
 class CapabilityListTest {
-    /** Builds a ToolSet without its collaborators (allocated, never constructed): descriptors only need the constructor to run. */
+    /** Allocate unused collaborators; PhoneShell needs a real context for its descriptor label. */
     private fun <T : ToolSet> build(type: Class<T>): T {
         val ctor = type.constructors.single()
         val unsafe = Class.forName("sun.misc.Unsafe").getDeclaredField("theUnsafe").apply { isAccessible = true }.get(null)
@@ -44,6 +47,10 @@ class CapabilityListTest {
         val args = ctor.parameterTypes.map { p ->
             when {
                 p == Context::class.java -> ApplicationProvider.getApplicationContext<Context>()
+                p == PhoneShell::class.java -> PhoneShell(
+                    ApplicationProvider.getApplicationContext<Context>(),
+                    allocate.invoke(unsafe, ShizukuShell::class.java) as ShizukuShell,
+                )
                 p.isInterface -> java.lang.reflect.Proxy.newProxyInstance(p.classLoader, arrayOf(p)) { _, _, _ -> error("not used") }
                 else -> allocate.invoke(unsafe, p)
             }
@@ -59,9 +66,18 @@ class CapabilityListTest {
     ).flatMap { build(it).tools }.map { CapabilityHub.listed(it) }
 
     @Test fun `descriptors stay within the token budget`() {
+        checkBudget(root = false)
+    }
+
+    @Test fun `root descriptors stay within the token budget`() {
+        checkBudget(root = true)
+    }
+
+    private fun checkBudget(root: Boolean) {
+        NativeRoot.setEnabled(ApplicationProvider.getApplicationContext<Context>(), root)
         val tools = listed()
         val json = JsonArray(tools.map { RpcJson.encodeToJsonElement(ToolDescriptor.serializer(), it) }).toString()
-        System.getenv("DSH_CAPABILITY_DUMP")?.takeIf { it.isNotBlank() }?.let { File(it).writeText(json) }
+        if (!root) System.getenv("DSH_CAPABILITY_DUMP")?.takeIf { it.isNotBlank() }?.let { File(it).writeText(json) }
         assertTrue("no tools", tools.isNotEmpty())
         tools.forEach { t ->
             val size = RpcJson.encodeToJsonElement(ToolDescriptor.serializer(), t).toString().length
