@@ -30,6 +30,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.InputTransformation
+import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -59,6 +61,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.coerceIn
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
@@ -109,7 +112,18 @@ const val MAX_IMAGES = 4
 
 @Stable
 class ComposerState {
-    var text by mutableStateOf("")
+    // Keep text, selection and IME composition in the same editor state across composer surfaces.
+    internal val editor = TextFieldState()
+    var text: String
+        get() = editor.text.toString()
+        set(value) {
+            if (value == text) return
+            editor.edit {
+                val previousSelection = selection
+                replace(0, length, value)
+                selection = previousSelection.coerceIn(0, length)
+            }
+        }
     val images = mutableStateListOf<ImageAttachment>()
     val files = mutableStateListOf<FileAttachment>()
     /** Picked attachments still decoding / copying; Send waits for them. */
@@ -294,17 +308,24 @@ fun Composer(
             stringResource(if (model.isDeepSeek) R.string.images_text_only_deepseek else R.string.images_text_only, modelLabel(model.model)),
             Modifier.padding(horizontal = 14.dp, vertical = 4.dp), style = DshType.xxs12, color = c.amber)
         BasicTextField(
-            state.text,
-            { v ->
-                if (voice?.active == true) voice.onUserEdit()
-                state.text = v
-                if (v == "/") slashOpen = true else if (slashOpen && !v.startsWith("/")) slashOpen = false
+            state = state.editor,
+            modifier = Modifier.fillMaxWidth().heightIn(min = if (hero) 52.dp else 36.dp, max = 216.dp)
+                .padding(start = 14.dp, end = 8.dp, top = 4.dp).focusRequester(focus),
+            inputTransformation = InputTransformation {
+                if (!originalText.contentEquals(asCharSequence())) {
+                    // Apply UI effects after Compose commits the user's edit. Programmatic drafts
+                    // (including partial voice transcripts) do not run this transformation.
+                    scope.launch {
+                        if (voice?.active == true) voice.onUserEdit()
+                        val draft = state.text
+                        if (draft == "/") slashOpen = true else if (slashOpen && !draft.startsWith("/")) slashOpen = false
+                    }
+                }
             },
-            Modifier.fillMaxWidth().heightIn(min = if (hero) 52.dp else 36.dp, max = 216.dp).padding(start = 14.dp, end = 8.dp, top = 4.dp).focusRequester(focus),
             textStyle = DshType.base16.copy(color = c.labelPrimary),
             cursorBrush = SolidColor(c.business),
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-            decorationBox = { inner ->
+            decorator = { inner ->
                 Box {
                     if (state.text.isEmpty()) Text(placeholder, style = DshType.base16, color = c.labelCaption, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     inner()
