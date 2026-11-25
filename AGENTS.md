@@ -21,3 +21,9 @@ DSH 安卓：原生 Android 客户端（Kotlin / Compose + Android 原生 Node.j
 
 - 这里只维护原生 Android 版；旧容器版已停止维护，不要恢复相关代码或文档。
 - main 受「Protect main」规则保护，禁止强制推送和删除分支。
+
+## 向 DSH-Android 贡献改动
+
+- `mam15mon/dsh-android` 用于日常开发和发布。向 `jackwener/DSH-Android` 贡献时，使用该仓库的 GitHub fork，从目标仓库当前的 `main` 为每项改动单独开分支。
+- 先写 Issue，再做对应的 PR。已有合适的 Issue 就沿用。Issue 写清楚实际使用场景和预期行为，PR 关联对应的 Issue。
+- 按目标仓库现有结构适配，每个 PR 只包含对应需求和必要改动。批量迁移包名、品牌和发布配置留在自己的仓库。
