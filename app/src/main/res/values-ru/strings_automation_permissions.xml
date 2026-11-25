@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="automation_confirm_title">Подтвердите автоматизацию «%1$s»</string>
+    <string name="automation_confirm_tools">После подтверждения автоматизация сможет вызывать эти инструменты без участия пользователя.</string>
+    <string name="automation_confirm_save">Разрешить и сохранить</string>
+    <string name="automation_no_tools">Нет</string>
+    <string name="automation_edit_tools">Изменить разрешения инструментов</string>
+    <string name="automation_find_tool">Поиск инструментов</string>
+    <string name="automation_add_named_tool">Добавить «%1$s»</string>
+    <string name="automation_tools_save_failed">Не удалось сохранить. Повторите попытку.</string>
+</resources>

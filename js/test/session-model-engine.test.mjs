@@ -194,3 +194,21 @@ test('an unknown route or an unsupported level is refused; null goes back to the
   await idle(sessionId)
   assert.deepEqual(sent('refused'), [{ model: 'chat-a', effort: undefined }])
 })
+
+test('an automation offers exactly its approved tool to the model and can invoke it', async () => {
+  const sessionId = `auto_1_${Date.now()}`
+  const id = 'automation-tools'
+  scripts.set(id, [{ tools: [['device_wait', { tag: 'automation' }]] }, { text: 'Done.' }])
+  await engine.sdk.request('android/session/mode', { sessionId, mode: { id: 'default', allowedTools: ['device_wait'] } })
+  try {
+    await prompt(sessionId, `[case:${id}] Use your available device tool.`)
+    await until(gate('automation').started.promise)
+    for (const { body } of requests.filter(r => r.id === id)) {
+      assert.deepEqual(body.tools.map(tool => tool.function.name), ['device_wait'])
+      assert.doesNotMatch(JSON.stringify(body.messages), /Tools loaded on demand/)
+    }
+  } finally {
+    gate('automation').release()
+  }
+  await idle(sessionId)
+})

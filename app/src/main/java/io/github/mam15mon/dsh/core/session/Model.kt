@@ -2,6 +2,7 @@ package io.github.mam15mon.dsh.core.session
 
 import io.github.mam15mon.dsh.core.model.PermissionPreset
 import io.github.mam15mon.dsh.core.model.Risk
+import io.github.mam15mon.dsh.core.model.RuleSpec
 import kotlinx.serialization.json.JsonObject
 
 /** One entry of a session's event log: a dsh `session.event`, or an app-local `app/...` record. */
@@ -17,6 +18,7 @@ data class PendingApproval(
     val risk: Risk,
     /** dsh shows 始终允许 only when the host offers it; we offer a per-session grant except for dangerous tools. */
     val canAlwaysAllow: Boolean,
+    val automation: RuleSpec? = null,
 )
 
 data class PendingQuestion(

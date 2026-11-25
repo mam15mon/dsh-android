@@ -83,19 +83,30 @@ class TriggerHub @Inject constructor(
     }
 
     /** Replaces a rule's spec (validated and normalized like [create]); the enabled state is kept unless given. */
-    suspend fun update(id: Long, spec: RuleSpec?, enabled: Boolean?): RuleSpec? {
-        val e = rules.get(id) ?: return null
+    suspend fun update(e: RuleEntity, spec: RuleSpec?, enabled: Boolean?): RuleSpec? {
         val normalized = spec?.let(::validate)
-        rules.upsert(e.copy(
-            specJson = normalized?.let { RpcJson.encodeToString(RuleSpec.serializer(), it) } ?: e.specJson,
-            enabled = enabled ?: e.enabled,
-        ))
+        val updated = normalized?.let { RpcJson.encodeToString(RuleSpec.serializer(), it) } ?: e.specJson
+        if (rules.replaceSpec(e.id, e.specJson, updated, enabled) == 0) return null
         sync()
         return normalized ?: decode(e)
     }
 
-    suspend fun setEnabled(id: Long, enabled: Boolean) { rules.get(id)?.let { rules.upsert(it.copy(enabled = enabled)) }; sync() }
+    suspend fun setEnabled(id: Long, enabled: Boolean) { rules.setEnabled(id, enabled); sync() }
     suspend fun delete(id: Long) { runCatching { cancelAlarm(id); cancelGeofence(id) }; rules.delete(id); sync() }
+
+    fun editableTools(): List<String> = capabilities.allTools.keys.sorted()
+
+    suspend fun editAllowedTools(id: Long, added: Set<String>, removed: Set<String>): Boolean {
+        repeat(3) {
+            val row = rules.get(id) ?: return false
+            val spec = decode(row) ?: return false
+            if (spec.action !is RuleAction.Agent) return false
+            val allowed = (spec.allowedTools.toSet() - removed + added).sorted()
+            val updated = RpcJson.encodeToString(RuleSpec.serializer(), spec.copy(allowedTools = allowed))
+            if (rules.replaceSpec(id, row.specJson, updated) == 1) return true
+        }
+        return false
+    }
 
     /**
      * What the rule needs but does not have right now (so it would silently never fire). Shown to the
@@ -196,7 +207,7 @@ class TriggerHub @Inject constructor(
         val claimed = lastFired.compute(e.id) { _, prev -> if (prev == null || now - prev >= DEBOUNCE_MS) now else prev }
         if (claimed != now) return
         if (rules.runsSince(e.id, now - 86_400_000L) >= DAILY_CAP) return
-        rules.get(e.id)?.let { rules.upsert(it.copy(lastFiredAt = now)) }
+        rules.setLastFired(e.id, now)
         val sessionId = "$AUTO_SESSION_PREFIX${e.id}_${UUID.randomUUID()}"
         Log.i(TAG, "rule ${e.id} '${s.name}' fired by $event")
         val outcome = try {

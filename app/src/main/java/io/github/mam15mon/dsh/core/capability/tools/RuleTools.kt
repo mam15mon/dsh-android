@@ -9,9 +9,11 @@ import io.github.mam15mon.dsh.core.capability.bool
 import io.github.mam15mon.dsh.core.capability.long
 import io.github.mam15mon.dsh.core.data.RuleDao
 import io.github.mam15mon.dsh.core.engine.RpcJson
+import io.github.mam15mon.dsh.core.engine.EngineCalls
 import io.github.mam15mon.dsh.core.model.Risk
 import io.github.mam15mon.dsh.core.model.RuleSpec
 import io.github.mam15mon.dsh.core.model.ToolGroup
+import io.github.mam15mon.dsh.core.session.SessionStore
 import io.github.mam15mon.dsh.core.trigger.RuleSpecException
 import io.github.mam15mon.dsh.core.trigger.TriggerHub
 import kotlinx.serialization.json.JsonObject
@@ -23,6 +25,7 @@ import javax.inject.Singleton
 class RuleTools @Inject constructor(
     private val rules: RuleDao,
     private val hub: Provider<TriggerHub>,
+    private val sessions: Provider<SessionStore>,
 ) : ToolSet {
     private fun parse(el: kotlinx.serialization.json.JsonElement?): RuleSpec {
         el ?: throw InvalidArgsException("missing 'rule' (a RuleSpec object)")
@@ -43,6 +46,12 @@ class RuleTools @Inject constructor(
         }
     }
 
+    private suspend fun confirm(call: CallContext, tool: String, spec: RuleSpec): Boolean {
+        if (!sessions.get().confirmAutomation(call.sessionId, call.callId, tool, spec)) return false
+        EngineCalls.ensureCallActive()
+        return true
+    }
+
     override val tools = listOf(
         object : Tool("rule_create", ToolGroup.Rules, Risk.write, false, RULE_DOC, {
             obj("rule", "RuleSpec JSON as documented", required = true)
@@ -50,6 +59,7 @@ class RuleTools @Inject constructor(
             override suspend fun invoke(args: JsonObject, call: CallContext): ToolResult {
                 if (call.unattended) throw InvalidArgsException("Automations cannot create automations")
                 val spec = parse(args["rule"])
+                if (!confirm(call, name, spec)) return ToolResult.error("not_authorized", "The user did not approve saving this automation.")
                 val id = hub.get().create(spec)
                 return ToolResult.text("Automation #$id \"${spec.name}\" created and enabled. Allowed tools: ${spec.allowedTools}" + notes(spec))
             }
@@ -66,7 +76,11 @@ class RuleTools @Inject constructor(
                 if (call.unattended) throw InvalidArgsException("Automations cannot change automations")
                 val id = args.long("id") ?: throw InvalidArgsException("missing 'id'")
                 val spec = args["rule"]?.let(::parse)
-                val saved = hub.get().update(id, spec, args.bool("enabled")) ?: throw InvalidArgsException("No automation #$id")
+                val existing = rules.get(id) ?: throw InvalidArgsException("No automation #$id")
+                val confirmed = spec ?: hub.get().decode(existing) ?: throw InvalidArgsException("Invalid automation #$id")
+                if (!confirm(call, name, confirmed)) return ToolResult.error("not_authorized", "The user did not approve updating this automation.")
+                val saved = hub.get().update(existing, spec, args.bool("enabled"))
+                    ?: throw InvalidArgsException("Automation #$id changed while awaiting approval. Read it again before updating.")
                 return ToolResult.text("Updated #$id" + (if (spec != null) ". Allowed tools: ${saved.allowedTools}" + notes(saved) else ""))
             }
         },
@@ -81,7 +95,7 @@ class RuleTools @Inject constructor(
 
     private companion object {
         val RULE_DOC = """
-Create an automation that runs when something happens on the phone, even while locked. Confirm the details with the user first.
+Create an automation. The app requests tool approval before saving.
 RuleSpec: {"name": str, "trigger": T, "conditions": [C...], "action": A, "allowedTools": [tool names the unattended run may use]}
 T (pick one, field "type"):
  {"type":"time","at":"HH:mm" (24h, e.g. "07:30"),"days":[1..7 Mon=1, empty=every day]} | {"type":"time","everyMinutes":n>=15} | {"type":"time","onceAtEpochMs":ms}
@@ -92,7 +106,7 @@ T (pick one, field "type"):
 C: {"type":"time_range","from":"HH:mm","to":"HH:mm"} | {"type":"days","days":[..]} | {"type":"battery","min":n,"max":n} | {"type":"charging","charging":bool}
 A: {"type":"steps","steps":[{"tool":"sound_mode","args":{"mode":"silent"}}]}  (fixed tool calls, no model, preferred when possible)
  | {"type":"agent","prompt":"what the agent should do"}  (an unattended agent run; it can only use allowedTools and cannot ask the user)
-Tools needing an unlocked screen will wait for the user to unlock; prefer tools that work while locked.
-The rule is validated before it is saved; the result lists any permission the trigger still needs.""".trim()
+Screen tools wait for unlock. List every needed tool, including app_guide if needed for app navigation. Unlisted tools are hidden.
+The result lists missing trigger permissions.""".trim()
     }
 }

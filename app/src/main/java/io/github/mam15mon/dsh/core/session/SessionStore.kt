@@ -570,10 +570,21 @@ class SessionStore @Inject constructor(
 
     private suspend fun sendMode(sdk: JsonRpcPeer, sessionId: String, modeId: String?) {
         val mode = settings.current().mode(modeId)
+        val payload = mode.payload(io.github.mam15mon.dsh.core.model.modeDisplayName(context, mode))
+        val ruleId = ruleIdOfSession(sessionId)
+        if (ruleId != null) {
+            val spec = rules.get(ruleId)?.let { RpcJson.decodeFromString(RuleSpec.serializer(), it.specJson) }
+            // Install the exact tool scope before prompting, including for resumed runs and subagents.
+            sdk.request("android/session/mode", buildJsonObject {
+                put("sessionId", sessionId)
+                put("mode", JsonObject(payload + ("allowedTools" to JsonArray(spec?.allowedTools.orEmpty().map(::JsonPrimitive)))))
+            })
+            return
+        }
         runCatching {
             sdk.request("android/session/mode", buildJsonObject {
                 put("sessionId", sessionId)
-                put("mode", mode.payload(io.github.mam15mon.dsh.core.model.modeDisplayName(context, mode)))
+                put("mode", payload)
             })
         }.onFailure { android.util.Log.w(TAG, "android/session/mode failed", it) }
     }
@@ -739,6 +750,10 @@ class SessionStore @Inject constructor(
             return if (spec != null && tool in spec.allowedTools) "allowed-once" else "rejected"
         }
         val live = flowOf(sessionId).value
+        if (tool == "rule_create" || tool == "rule_update") {
+            // RuleTools requests confirmation over the exact validated specification before writing it.
+            return if (live.preset == PermissionPreset.ReadOnly) "rejected" else "allowed-once"
+        }
         val risk = capabilities.descriptor(tool)?.risk ?: Risk.write
         android.util.Log.i(TAG, "approval $tool (risk $risk) for $sessionId (from ${p.s("sessionId")}), preset ${live.preset.id}")
         when (live.preset) {
@@ -763,6 +778,17 @@ class SessionStore @Inject constructor(
             ApprovalOutcome.AllowSession -> { sessionGrants.getOrPut(sessionId) { ConcurrentHashMap.newKeySet() }.add(tool); "allowed-once" }
             ApprovalOutcome.Reject -> "rejected"
         }
+    }
+
+    suspend fun confirmAutomation(sessionId: String, callId: String, tool: String, spec: RuleSpec): Boolean {
+        if (sessionId.isBlank() || flowOf(sessionId).value.preset == PermissionPreset.ReadOnly) return false
+        val key = UUID.randomUUID().toString()
+        val deferred = CompletableDeferred<ApprovalOutcome>()
+        approvals[key] = deferred
+        val card = PendingApproval(key, sessionId, tool, callId, null, null, Risk.write, false, automation = spec)
+        return awaitCard(sessionId, card, key, approvals, deferred) {
+            if (!AppVisibility.isForeground) announceWaiting(sessionId, context.getString(R.string.notif_approval_title), spec.name)
+        } == ApprovalOutcome.AllowOnce
     }
 
     /**

@@ -107,7 +107,7 @@ Shizuku 用户服务（shell uid，可选）：ShellUserService
 
 ## 自动化（core/trigger/）
 
-规则 `RuleSpec`：一个触发器、若干条件、一个动作，外加一份 `allowedTools` 白名单。规则只能通过和 agent 对话创建（`rule_*` 工具会校验并规范化规则）；自动化页面负责列表、开关、详情和执行记录。
+规则 `RuleSpec` 包含触发器、条件、动作和 `allowedTools` 白名单。通过对话创建或更新时，App 校验规则并显示工具授权卡，用户确认后才保存。自动化详情可以直接编辑智能体任务的工具授权。
 
 | 触发器 | 实现 |
 |---|---|
@@ -119,7 +119,7 @@ Shizuku 用户服务（shell uid，可选）：ShellUserService
 
 条件：时间段、星期几、电量范围、是否在充电。同一条规则 60 秒内只触发一次，24 小时内最多 50 次。开机、App 更新、精确闹钟权限变化时由 `BootReceiver` 重新注册。
 
-动作有两种：`steps` 直接调用 `CapabilityHub`，不启动引擎、不调用模型；`agent` 新建一个 `auto_<ruleId>_<uuid>` 会话。无人值守会话不会弹审批：白名单内的工具自动允许，其他的拒绝；`ask_user_question` 由 `plugin-guard` 直接回答“没人在场”。Android 12+ 不允许从后台启动前台服务时，降级为一条“点此执行”的高优先级通知（`DeferredRunActivity`）。
+`steps` 直接调用 `CapabilityHub`，无需启动引擎或调用模型。`agent` 新建 `auto_<ruleId>_<uuid>` 会话，通过 `android/session/mode` 向引擎发送白名单，引擎只提供其中的工具，子智能体继承同一限制。无人值守的工具审批及设备调用也会核对任务的白名单。Android 12+ 拒绝后台启动前台服务时，App 发送「点此执行」通知（`DeferredRunActivity`）。
 
 ## 入口
 

@@ -16,7 +16,7 @@
 // the androidExtensions service (@dsh-android/plugin-extensions, js patch 19 ownership). A mode
 // whose `tools` list omits it (the app's read-only modes) hides them: nothing says a plugin
 // tool is read-only.
-// A conversation the app has not described (or `mode: null`) is unrestricted.
+// A normal conversation the app has not described (or `mode: null`) is unrestricted.
 //
 // Deferred tools (deferred.js, issue #36): device, extension and rarely used built-in tools are
 // hidden the same way until `load_tools` loads them; a catalog section lists them. Config
@@ -78,7 +78,7 @@ const stringList = (value, field) => {
 /** Validate the app's mode payload; returns a frozen normalized mode. Throws TypeError on bad input. */
 export function normalizeMode(raw) {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new TypeError('android/session/mode: mode must be an object or null')
-  const { id, name: label, prompt, deviceGroups, tools, skills } = raw
+  const { id, name: label, prompt, deviceGroups, tools, skills, allowedTools } = raw
   if (typeof id !== 'string' || id === '' || id.length > 64) throw new TypeError('android/session/mode: mode.id must be a non-empty string')
   if (label !== undefined && typeof label !== 'string') throw new TypeError('android/session/mode: mode.name must be a string')
   if (prompt !== undefined && prompt !== null && typeof prompt !== 'string') throw new TypeError('android/session/mode: mode.prompt must be a string')
@@ -92,12 +92,15 @@ export function normalizeMode(raw) {
     prompt: (prompt ?? '').trim().slice(0, MAX_PROMPT),
     deviceGroups: stringList(deviceGroups, 'mode.deviceGroups'),
     tools: categories,
+    allowedTools: stringList(allowedTools, 'mode.allowedTools'),
     skills: skills !== false,
   })
 }
 
+const AUTOMATION_DEFAULT = normalizeMode({ id: DEFAULT_ID, allowedTools: [] })
+
 /** Whether the mode limits tools at all. */
-export const restricts = mode => mode !== undefined && (mode.deviceGroups !== null || mode.tools !== null || !mode.skills)
+export const restricts = mode => mode !== undefined && (mode.deviceGroups !== null || mode.tools !== null || mode.allowedTools != null || !mode.skills)
 
 /**
  * Whether [mode] excludes the tool [toolName]. [descriptorOf] returns the device descriptor
@@ -105,6 +108,7 @@ export const restricts = mode => mode !== undefined && (mode.deviceGroups !== nu
  */
 export function excludes(mode, toolName, descriptorOf = () => undefined, isExtension = () => false) {
   if (mode === undefined) return false
+  if (mode.allowedTools != null && !mode.allowedTools.has(toolName)) return true
   if (toolName === SKILL_TOOL) return !mode.skills
   const device = descriptorOf(toolName)
   if (device !== undefined) return mode.deviceGroups !== null && !mode.deviceGroups.has(device.group)
@@ -120,13 +124,15 @@ export function modeSection(mode) {
   const parts = [`# Conversation mode: ${mode.name}`]
   if (mode.prompt !== '') parts.push(mode.prompt)
   if (limited) {
-    parts.push('This mode limits the tools of this conversation: tools it leaves out are not available here, even where other instructions mention them. ' +
+    parts.push(mode.allowedTools != null ? 'This automation can use only the tools its owner approved. If a required tool is unavailable, report what is missing so the owner can edit the automation’s permissions.' :
+      'This mode limits the tools of this conversation: tools it leaves out are not available here, even where other instructions mention them. ' +
       'If the task needs one of them, say so and suggest the user start a new conversation in a mode that has it (the mode is chosen before the first message).')
   }
   return parts.join('\n\n')
 }
 
 export function refusalText(toolName, mode) {
+  if (mode.allowedTools != null && !mode.allowedTools.has(toolName)) return `The tool "${toolName}" is not approved for this automation. The owner can edit its allowed tools in the automation details.`
   return `"${toolName}" is not available in this conversation's mode (${mode.name}), so the call was not run. ` +
     'Do not retry it or work around it with another tool. Tell the user, and suggest a new conversation in a mode that includes it if they need it.'
 }
@@ -207,7 +213,12 @@ export function apply(ctx, config = {}) {
   const descriptorOf = toolName => { try { return ctx.get('androidBridge')?.descriptorOf?.(toolName) } catch { return undefined } }
   const isExtension = toolName => { try { return ctx.get('androidExtensions')?.isExtensionTool?.(toolName) === true } catch { return false } }
   const agents = () => { try { return ctx.get('agents')?.list?.() ?? [] } catch { return [] } }
-  const modeOf = agent => { const root = rootSessionId(ctx, agent); return root === undefined ? undefined : modes.get(root) }
+  const modeOf = agent => {
+    const root = rootSessionId(ctx, agent)
+    if (root === undefined) return undefined
+    const mode = modes.get(root)
+    return root.startsWith('auto_') && mode?.allowedTools == null ? AUTOMATION_DEFAULT : mode
+  }
   const describe = toolName => { try { return ctx.tools.get?.(toolName)?.description } catch { return undefined } }
 
   /** What [root]'s conversation has loaded; restored from the root agent's log the first time. */
@@ -222,7 +233,7 @@ export function apply(ctx, config = {}) {
   }
 
   /** The deferred catalog of [agent] given the tools that exist ([names]) and its [mode]. */
-  const catalogOf = (names, mode) => !deferTools ? [] :
+  const catalogOf = (names, mode) => !deferTools || mode?.allowedTools != null ? [] :
     catalogGroups(names.filter(n => !excludes(mode, n, descriptorOf, isExtension)), descriptorOf, isExtension)
 
   /** Names a restriction on [agent]'s scope may name (dsh rejects unknown ones). */

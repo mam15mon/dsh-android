@@ -150,6 +150,28 @@ test('a mode sent before the agent exists applies when it is created; subagents 
   assert.equal(h.guard({ name: 'bash', agent: other }), undefined)
 })
 
+test('automation scopes expose only approved tools, including on subagents and after an update', () => {
+  const h = harness({ deferTools: true, device: { ...DEVICE, app_guide: { name: 'app_guide', group: 'apps' } } })
+  const root = h.makeAgent('auto_1_test')
+  const child = h.makeAgent('child', 'auto_1_test')
+  h.emit('agent/created', { agent: root })
+  h.emit('agent/created', { agent: child })
+  assert.match(h.guard({ name: 'screen_tap', agent: root }), /not approved/)
+  const send = allowedTools => h.method('android/session/mode')({ sessionId: 'auto_1_test', mode: { id: 'default', allowedTools } })
+  send(['screen_tap'])
+  for (const agent of [root, child]) {
+    const denied = agent.scope.restrictions[0].deny
+    assert.ok(!denied.includes('screen_tap'))
+    for (const name of ['app_guide', 'bash', 'todo_write', LOADER]) assert.ok(denied.includes(name), name)
+    assert.match(h.guard({ name: 'app_guide', agent }), /not approved/)
+    assert.equal(h.services.get('androidToolScope').deferred('screen_tap', agent), false)
+  }
+  send(['screen_tap', 'app_guide'])
+  assert.equal(h.guard({ name: 'app_guide', agent: child }), undefined)
+  assert.ok(!child.scope.restrictions[0].deny.includes('app_guide'))
+  assert.equal(h.guard({ name: 'bash', agent: h.makeAgent('ordinary') }), undefined)
+})
+
 test('a resumed agent gets the mode when the app sends it; re-sending is idempotent; null clears', async () => {
   const h = harness()
   const agent = h.makeAgent('r1')

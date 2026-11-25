@@ -138,6 +138,12 @@ interface RuleDao {
     fun observeOne(id: Long): Flow<RuleEntity?>
     @Insert suspend fun insert(r: RuleEntity): Long
     @Upsert suspend fun upsert(r: RuleEntity)
+    @Query("UPDATE rules SET specJson = :updated, enabled = COALESCE(:enabled, enabled) WHERE id = :id AND specJson = :previous")
+    suspend fun replaceSpec(id: Long, previous: String, updated: String, enabled: Boolean? = null): Int
+    @Query("UPDATE rules SET enabled = :enabled WHERE id = :id")
+    suspend fun setEnabled(id: Long, enabled: Boolean)
+    @Query("UPDATE rules SET lastFiredAt = :time WHERE id = :id")
+    suspend fun setLastFired(id: Long, time: Long)
     @Query("DELETE FROM rules WHERE id = :id")
     suspend fun delete(id: Long)
     @Insert suspend fun insertRun(r: RuleRunEntity)

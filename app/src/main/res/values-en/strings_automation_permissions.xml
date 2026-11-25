@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="automation_confirm_title">Confirm automation “%1$s”</string>
+    <string name="automation_confirm_tools">Once approved, this automation can call these tools unattended.</string>
+    <string name="automation_confirm_save">Approve and save</string>
+    <string name="automation_no_tools">None</string>
+    <string name="automation_edit_tools">Edit tool permissions</string>
+    <string name="automation_find_tool">Search tools</string>
+    <string name="automation_add_named_tool">Add “%1$s”</string>
+    <string name="automation_tools_save_failed">Could not save. Try again.</string>
+</resources>

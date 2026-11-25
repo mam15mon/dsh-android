@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import io.github.mam15mon.dsh.core.designsystem.EmptyNote
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -74,12 +75,14 @@ import io.github.mam15mon.dsh.core.model.RuleAction
 import io.github.mam15mon.dsh.core.model.RuleSpec
 import io.github.mam15mon.dsh.core.model.Trigger
 import io.github.mam15mon.dsh.core.trigger.TriggerHub
+import io.github.mam15mon.dsh.feature.conversation.ToolPresentation
 import io.github.mam15mon.dsh.feature.settings.isZh
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -95,6 +98,14 @@ class AutomationViewModel @Inject constructor(private val hub: TriggerHub, priva
     val runs: Flow<List<RuleRunEntity>> = ruleId?.let { dao.runs(it) } ?: emptyFlow()
     fun toggle(id: Long, on: Boolean) = viewModelScope.launch { hub.setEnabled(id, on) }
     fun delete(id: Long) = viewModelScope.launch { hub.delete(id) }
+    fun editableTools() = hub.editableTools()
+    fun saveAllowedTools(id: Long, added: Set<String>, removed: Set<String>, result: (Boolean) -> Unit) = viewModelScope.launch {
+        val saved = try { hub.editAllowedTools(id, added, removed) } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            false
+        }
+        result(saved)
+    }
 }
 
 private enum class RuleFilter { All, On, Off }
@@ -174,6 +185,7 @@ fun RuleDetailScreen(onBack: () -> Unit, onOpenSession: (String) -> Unit, vm: Au
     val row by vm.rule.collectAsStateWithLifecycle()
     val runs by vm.runs.collectAsStateWithLifecycle(emptyList())
     var deleting by remember { mutableStateOf(false) }
+    var editingTools by remember { mutableStateOf(false) }
     val r = row
     Column(Modifier.fillMaxSize().background(c.bgBase).statusBarsPadding()) {
         DTopBar(r?.spec?.name ?: stringResource(R.string.automation), onBack) { r?.let { DSwitch(it.entity.enabled, { on -> vm.toggle(it.entity.id, on) }) }; Spacer(Modifier.width(8.dp)) }
@@ -197,9 +209,11 @@ fun RuleDetailScreen(onBack: () -> Unit, onOpenSession: (String) -> Unit, vm: Au
                         is RuleAction.Steps -> { Tag(stringResource(R.string.rule_fixed_steps), Tone.Success); a.steps.forEachIndexed { i, st -> Text("${i + 1}. ${st.tool} ${st.args}", style = DshType.mono12, color = c.labelSecondary) } }
                         null -> Text("—")
                     }
-                    if (!s?.allowedTools.isNullOrEmpty()) {
+                    if (s != null) {
                         Text(stringResource(R.string.rule_allowed_tools), style = DshType.xs13m, color = c.labelTertiary)
-                        Text(s!!.allowedTools.joinToString(", "), style = DshType.mono12, color = c.labelSecondary)
+                        Text(s.allowedTools.joinToString(", ").ifEmpty { stringResource(R.string.automation_no_tools) }, style = DshType.mono12, color = c.labelSecondary)
+                        if (s.action is RuleAction.Agent) DButton(stringResource(R.string.automation_edit_tools), { editingTools = true },
+                            variant = BtnVariant.Outline, size = BtnSize.Sm)
                     }
                 }
             }
@@ -224,10 +238,53 @@ fun RuleDetailScreen(onBack: () -> Unit, onOpenSession: (String) -> Unit, vm: Au
             Spacer(Modifier.height(24.dp))
         }
     }
+    if (editingTools && r?.spec != null) AllowedToolsDialog(r, vm) { editingTools = false }
     if (deleting && r != null) DDialog({ deleting = false }, stringResource(R.string.delete_rule), buttons = {
         DButton(stringResource(R.string.cancel), { deleting = false }, variant = BtnVariant.Outline)
         DButton(stringResource(R.string.delete), { deleting = false; vm.delete(r.entity.id); onBack() }, variant = BtnVariant.Danger)
     }) { Text(stringResource(R.string.delete_rule_body), style = DshType.s14) }
+}
+
+@Composable
+private fun AllowedToolsDialog(row: RuleRow, vm: AutomationViewModel, onDismiss: () -> Unit) {
+    val initial = remember(row.entity.id) { row.spec?.allowedTools.orEmpty().toSet() }
+    var selected by remember(row.entity.id) { mutableStateOf(initial) }
+    var names by remember(row.entity.id) { mutableStateOf((vm.editableTools() + selected).toSortedSet()) }
+    var query by remember { mutableStateOf("") }
+    var saving by remember { mutableStateOf(false) }
+    var failed by remember { mutableStateOf(false) }
+    val searched = query.trim()
+    val canAdd = searched.matches(Regex("[A-Za-z0-9_][A-Za-z0-9_.:-]*")) && searched !in names
+    DDialog({ if (!saving) onDismiss() }, stringResource(R.string.automation_edit_tools), buttons = {
+        DButton(stringResource(R.string.cancel), onDismiss, enabled = !saving, variant = BtnVariant.Outline)
+        DButton(stringResource(R.string.save), {
+            saving = true
+            vm.saveAllowedTools(row.entity.id, selected - initial, initial - selected) { ok ->
+                saving = false
+                if (ok) onDismiss() else failed = true
+            }
+        }, enabled = !saving && selected != initial)
+    }) {
+        DInput(query, { query = it }, placeholder = stringResource(R.string.automation_find_tool))
+        if (canAdd) DButton(stringResource(R.string.automation_add_named_tool, searched), {
+            names = (names + searched).toSortedSet()
+            selected = selected + searched
+            query = ""
+        }, enabled = !saving, variant = BtnVariant.Outline, size = BtnSize.Sm)
+        val labels = names.map { name ->
+            val title = ToolPresentation.info(name).title
+            name to if (title == R.string.tool_generic) name else stringResource(title)
+        }
+        val shown = labels.filter { (name, label) -> name.contains(searched, true) || label.contains(searched, true) }
+        LazyColumn(Modifier.heightIn(max = 280.dp)) {
+            items(shown, key = { it.first }) { (name, label) ->
+                SettingsRow(label, name.takeUnless { it == label }, divider = false, trailing = {
+                    DSwitch(name in selected, { on -> selected = if (on) selected + name else selected - name }, enabled = !saving)
+                })
+            }
+        }
+        if (failed) Text(stringResource(R.string.automation_tools_save_failed), style = DshType.xs13, color = Dsh.colors.error)
+    }
 }
 
 fun describeTrigger(t: Trigger, zh: Boolean): String = when (t) {

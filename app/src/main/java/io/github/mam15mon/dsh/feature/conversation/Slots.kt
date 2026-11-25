@@ -99,19 +99,33 @@ fun ApprovalCard(a: PendingApproval, onAnswer: (ApprovalOutcome) -> Unit) {
     val pseudo = Block.Tool("", a.callId ?: "", a.toolName, a.arguments ?: "", parseArgs(a.arguments), ToolState.Running, null, null, null, 0, null)
     val summary = ToolPresentation.summary(context, pseudo)
     AttentionCard(stringResource(R.string.waiting_approval), answered, body = {
-        Text(a.reason?.takeIf { it.isNotBlank() } ?: stringResource(R.string.approval_headline, stringResource(info.title)),
-            style = DshType.s14m.copy(fontSize = DshType.base16.fontSize * 0.94f, lineHeight = DshType.base16.lineHeight), color = c.labelPrimary)
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Tag(a.toolName, mono = true)
-            if (a.risk == Risk.dangerous) Tag(stringResource(R.string.risk_dangerous), Tone.Error)
-            else if (a.risk == Risk.sensitive) Tag(stringResource(R.string.risk_sensitive), Tone.Warn)
+        val automation = a.automation
+        if (automation != null) {
+            Text(stringResource(R.string.automation_confirm_title, automation.name), style = DshType.s14m, color = c.labelPrimary)
+            Text(stringResource(R.string.automation_confirm_tools), style = DshType.xs13, color = c.labelSecondary)
+            if (automation.allowedTools.isEmpty()) {
+                Text(stringResource(R.string.automation_no_tools), style = DshType.xs13, color = c.labelPrimary)
+            }
+            automation.allowedTools.forEach { name ->
+                val title = ToolPresentation.info(name).title
+                val label = if (title == R.string.tool_generic) name else "${stringResource(title)} · $name"
+                Text(label, style = DshType.xs13, color = c.labelPrimary)
+            }
+        } else {
+            Text(a.reason?.takeIf { it.isNotBlank() } ?: stringResource(R.string.approval_headline, stringResource(info.title)),
+                style = DshType.s14m.copy(fontSize = DshType.base16.fontSize * 0.94f, lineHeight = DshType.base16.lineHeight), color = c.labelPrimary)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Tag(a.toolName, mono = true)
+                if (a.risk == Risk.dangerous) Tag(stringResource(R.string.risk_dangerous), Tone.Error)
+                else if (a.risk == Risk.sensitive) Tag(stringResource(R.string.risk_sensitive), Tone.Warn)
+            }
+            if (!summary.isNullOrBlank()) Text(summary, style = DshType.xs13, color = c.labelSecondary)
+            if (!a.arguments.isNullOrBlank() && a.arguments != "{}") Text(prettyJson(a.arguments).take(1500), style = DshType.mono13, color = c.labelTertiary)
+            if (a.risk == Risk.dangerous) Text(stringResource(R.string.approval_dangerous_note), style = DshType.xs13, color = c.labelSecondary)
         }
-        if (!summary.isNullOrBlank()) Text(summary, style = DshType.xs13, color = c.labelSecondary)
-        if (!a.arguments.isNullOrBlank() && a.arguments != "{}") Text(prettyJson(a.arguments).take(1500), style = DshType.mono13, color = c.labelTertiary)
-        if (a.risk == Risk.dangerous) Text(stringResource(R.string.approval_dangerous_note), style = DshType.xs13, color = c.labelSecondary)
     }) {
         DButton(stringResource(R.string.reject), { answered = true; onAnswer(ApprovalOutcome.Reject) }, variant = BtnVariant.Outline, enabled = !answered)
-        DButton(stringResource(R.string.allow_once), { answered = true; onAnswer(ApprovalOutcome.AllowOnce) },
+        DButton(stringResource(if (a.automation != null) R.string.automation_confirm_save else R.string.allow_once), { answered = true; onAnswer(ApprovalOutcome.AllowOnce) },
             variant = if (a.canAlwaysAllow) BtnVariant.Outline else BtnVariant.Primary, enabled = !answered)
         if (a.canAlwaysAllow) DButton(stringResource(R.string.always_allow), { answered = true; onAnswer(ApprovalOutcome.AllowSession) }, enabled = !answered)
     }

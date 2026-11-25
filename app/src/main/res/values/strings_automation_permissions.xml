@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="automation_confirm_title">确认自动化「%1$s」</string>
+    <string name="automation_confirm_tools">授权后，任务可在无人值守时调用这些工具。</string>
+    <string name="automation_confirm_save">授权并保存</string>
+    <string name="automation_no_tools">无</string>
+    <string name="automation_edit_tools">编辑工具授权</string>
+    <string name="automation_find_tool">搜索工具名称</string>
+    <string name="automation_add_named_tool">添加「%1$s」</string>
+    <string name="automation_tools_save_failed">保存失败，请重试。</string>
+</resources>
