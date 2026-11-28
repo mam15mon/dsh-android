@@ -45,6 +45,11 @@
   - 「命令规则」页（`CommandRulesSection`）：将命令规则测试框 `RulePreview` 移到 14 条内置规则之前。
   - 「Root 与项目」页（`NativeRootActivity`）：在已开启 Root 授权时将「工作项目」区块提至「Root 操作」状态卡之前。
 
+- [x] **完整版自动化任务升级与缺陷修复**
+  - **Bug 修复**：修复 `RuleMonitorService` 无定位权限时不限 SSID Wi-Fi 连接不触发（新增 `wifiConnected` 状态追踪）；支持 `RuleMonitorService` 按当前启用规则所需广播掩码动态注册/注销；新增系统时间/时区变更广播监听（`TIME_SET` / `TIMEZONE_CHANGED`）重排闹钟；单次定时任务（`onceAtEpochMs`）触发或同步发现过期后自动关闭；删除规则时同步清理 `rule_runs` 与防抖状态；`editAllowedTools`/`editSpec` 后及时 `sync()`；Play Services 地理围栏改用顺序挂起避免竞态。
+  - **执行与配置能力扩展**：`RuleSpec` 向后兼容新增 `cooldownSeconds`、`notifyOnSuccess`、`modelProvider`/`modelId`/`modelEffort`、`workspace`，`Trigger` 新增 `Trigger.Manual`（手动触发）；`SessionStore` 在自动会话创建、失败、降级、停止、完成时真实回写 `rule_runs.outcome` 并应用规则级模型/工作目录/静默配置；`RuleTools.rule_delete` 补齐 `unattended` 与存在性校验。
+  - **UI 与测试补全**：`AutomationScreen` / `RuleDetailScreen` 新增 5 个快捷模板、缺失权限高亮标签与一键跳转、下次预计触发时间、手动一键运行、「立即运行」/「快速编辑」弹窗（改名称/时间/关键词/Prompt/冷却/成功通知/模型/工作项目）/「对话修改」及 5 种运行态映射；新建 `RuleMatcher.kt` 与 `RuleMatcherTest.kt` 并扩充 `RuleValidationTest.kt`。
+
 ## 待办 / 需确认项
 
 - [ ] **R8 混淆与资源裁剪真机验证**（`app/build.gradle.kts` 当前保持 `isMinifyEnabled = false` / `isShrinkResources = false`；开启前需在真机上完整验证 JNI、Shizuku、RootService 反射与序列化流程）。

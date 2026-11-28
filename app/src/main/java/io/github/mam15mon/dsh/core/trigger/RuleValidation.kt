@@ -81,7 +81,28 @@ fun validateRule(spec: RuleSpec, knownTools: Set<String>, now: Long = System.cur
             allowed = allowed + a.steps.map { it.tool }
         }
     }
+    if (spec.cooldownSeconds !in 0..86_400) p += "cooldownSeconds must be 0..86400, got ${spec.cooldownSeconds}"
+    val normalizedWorkspace = spec.workspace?.let { raw ->
+        if (raw.isEmpty()) "" else {
+            val ws = raw.trim().trimEnd('/').ifEmpty { "/" }
+            if (!ws.startsWith("/") || ws.any { it == '\n' || it == '\t' || it == '\u0000' }) {
+                p += "workspace must be an absolute path"
+                raw
+            } else ws
+        }
+    }
+    val normalizedModelId = spec.modelId?.trim()?.takeIf { it.isNotEmpty() }
+    val normalizedProvider = if (normalizedModelId == null) null else spec.modelProvider?.trim().orEmpty()
+    val normalizedEffort = if (normalizedModelId == null) null else spec.modelEffort?.trim()?.takeIf { it.isNotEmpty() }
     // allowedTools may also name engine built-ins (web_search, read, …), so unknown names are not an error.
     if (p.isNotEmpty()) throw RuleSpecException(p)
-    return spec.copy(trigger = trigger, conditions = conditions, allowedTools = allowed.distinct())
+    return spec.copy(
+        trigger = trigger,
+        conditions = conditions,
+        allowedTools = allowed.distinct(),
+        modelProvider = normalizedProvider,
+        modelId = normalizedModelId,
+        modelEffort = normalizedEffort,
+        workspace = normalizedWorkspace,
+    )
 }

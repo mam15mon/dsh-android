@@ -30,8 +30,13 @@ import io.github.mam15mon.dsh.core.platform.Notifications
 class RuleMonitorService : Service() {
     private var lastBattery: Int? = null
     private var lastSsid: String? = null
+    private var wifiConnected = false
     /** False until the first network callback: the current Wi-Fi is the baseline, not a "connected" event. */
     private var wifiSeeded = false
+    private var activeMask = 0
+    private var stdMask = 0
+    private var btRegistered = false
+    private var wifiRegistered = false
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
@@ -80,8 +85,12 @@ class RuleMonitorService : Service() {
         val info = if (Build.VERSION.SDK_INT >= 31) caps.transportInfo as? WifiInfo
             else runCatching { getSystemService(WifiManager::class.java).connectionInfo }.getOrNull()
         val ssid = info?.ssid?.trim('"')?.takeIf { it != "<unknown ssid>" && it.isNotEmpty() }
-        if (!wifiSeeded) { wifiSeeded = true; lastSsid = ssid; return }
-        if (ssid != lastSsid) { lastSsid = ssid; TriggerEvents.emit(DeviceEvent.Wifi(true, ssid)) }
+        if (!wifiSeeded) { wifiSeeded = true; wifiConnected = true; lastSsid = ssid; return }
+        if (!wifiConnected || (ssid != null && ssid != lastSsid)) {
+            wifiConnected = true
+            lastSsid = ssid
+            TriggerEvents.emit(DeviceEvent.Wifi(true, ssid))
+        }
     }
 
     // NetworkCallback(FLAG_INCLUDE_LOCATION_INFO) is API 31+; constructing it on 29/30 crashed the service.
@@ -94,7 +103,15 @@ class RuleMonitorService : Service() {
             override fun onLost(network: Network) = onWifiLost()
         }
 
-    private fun onWifiLost() { wifiSeeded = true; TriggerEvents.emit(DeviceEvent.Wifi(false, lastSsid)); lastSsid = null }
+    private fun onWifiLost() {
+        if (!wifiSeeded || wifiConnected) {
+            wifiSeeded = true
+            wifiConnected = false
+            val prev = lastSsid
+            lastSsid = null
+            TriggerEvents.emit(DeviceEvent.Wifi(false, prev))
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -103,36 +120,100 @@ class RuleMonitorService : Service() {
             startForeground(Notifications.ID_MONITOR, NotificationCompat.Builder(this, Notifications.CHANNEL_MONITOR)
                 .setSmallIcon(R.drawable.ic_stat_dsh).setContentTitle(getString(R.string.monitor_running)).setOngoing(true).setSilent(true).build(),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        }.onFailure { android.util.Log.w("RuleMonitorService", "startForeground refused", it); lastStartRefused = true; stopSelf(); return }
-        ContextCompat.registerReceiver(this, receiver, IntentFilter().apply {
-            listOf(Intent.ACTION_POWER_CONNECTED, Intent.ACTION_POWER_DISCONNECTED, Intent.ACTION_HEADSET_PLUG, Intent.ACTION_SCREEN_ON,
-                Intent.ACTION_SCREEN_OFF, Intent.ACTION_USER_PRESENT, Intent.ACTION_BATTERY_CHANGED).forEach(::addAction)
-        }, ContextCompat.RECEIVER_NOT_EXPORTED)
-        ContextCompat.registerReceiver(this, btReceiver, IntentFilter().apply {
-            addAction(BluetoothDevice.ACTION_ACL_CONNECTED); addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
-        }, ContextCompat.RECEIVER_EXPORTED)
-        runCatching {
-            val cm = getSystemService(ConnectivityManager::class.java)
-            // Already on Wi-Fi: the first callback reports it and is only the baseline. Not on Wi-Fi:
-            // the first callback is a real "connected" event.
-            @Suppress("DEPRECATION")
-            wifiSeeded = cm.allNetworks.none { cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true }
-            cm.registerNetworkCallback(
-                NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(), netCallback)
-        }.onFailure { android.util.Log.w("RuleMonitorService", "network callback", it) }
+        }.onFailure { android.util.Log.w("RuleMonitorService", "startForeground refused", it); lastStartRefused = true; running = false; stopSelf(); return }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!running) return START_NOT_STICKY
+        val mask = intent?.getIntExtra(EXTRA_MASK, currentMask) ?: currentMask
+        if (mask == 0) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        applyMask(mask)
+        return START_STICKY
+    }
+
+    private fun applyMask(mask: Int) {
+        if (mask == activeMask) return
+        val nextStd = mask and (RuleMatcher.FLAG_POWER or RuleMatcher.FLAG_BATTERY or RuleMatcher.FLAG_HEADSET or RuleMatcher.FLAG_SCREEN)
+        if (nextStd != stdMask) {
+            if (stdMask != 0) runCatching { unregisterReceiver(receiver) }
+            if ((nextStd and RuleMatcher.FLAG_BATTERY) == 0) lastBattery = null
+            if (nextStd != 0) {
+                val filter = IntentFilter().apply {
+                    if ((nextStd and RuleMatcher.FLAG_POWER) != 0) {
+                        addAction(Intent.ACTION_POWER_CONNECTED)
+                        addAction(Intent.ACTION_POWER_DISCONNECTED)
+                    }
+                    if ((nextStd and RuleMatcher.FLAG_HEADSET) != 0) addAction(Intent.ACTION_HEADSET_PLUG)
+                    if ((nextStd and RuleMatcher.FLAG_SCREEN) != 0) {
+                        addAction(Intent.ACTION_SCREEN_ON)
+                        addAction(Intent.ACTION_SCREEN_OFF)
+                        addAction(Intent.ACTION_USER_PRESENT)
+                    }
+                    if ((nextStd and RuleMatcher.FLAG_BATTERY) != 0) addAction(Intent.ACTION_BATTERY_CHANGED)
+                }
+                ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+            }
+            stdMask = nextStd
+        }
+
+        val wantBt = (mask and RuleMatcher.FLAG_BLUETOOTH) != 0
+        if (wantBt != btRegistered) {
+            if (wantBt) {
+                ContextCompat.registerReceiver(this, btReceiver, IntentFilter().apply {
+                    addAction(BluetoothDevice.ACTION_ACL_CONNECTED); addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
+                }, ContextCompat.RECEIVER_EXPORTED)
+                btRegistered = true
+            } else {
+                runCatching { unregisterReceiver(btReceiver) }
+                btRegistered = false
+            }
+        }
+
+        val wantWifi = (mask and RuleMatcher.FLAG_WIFI) != 0
+        if (wantWifi != wifiRegistered) {
+            if (wantWifi) {
+                runCatching {
+                    val cm = getSystemService(ConnectivityManager::class.java)
+                    @Suppress("DEPRECATION")
+                    val alreadyOnWifi = cm.allNetworks.any { cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true }
+                    wifiConnected = alreadyOnWifi
+                    wifiSeeded = !alreadyOnWifi
+                    lastSsid = null
+                    cm.registerNetworkCallback(
+                        NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(), netCallback)
+                    wifiRegistered = true
+                }.onFailure { android.util.Log.w("RuleMonitorService", "network callback", it) }
+            } else {
+                runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(netCallback) }
+                wifiRegistered = false
+                wifiConnected = false
+                wifiSeeded = false
+                lastSsid = null
+            }
+        }
+        activeMask = mask
     }
 
     override fun onDestroy() {
         running = false
-        runCatching { unregisterReceiver(receiver) }
-        runCatching { unregisterReceiver(btReceiver) }
-        runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(netCallback) }
+        if (stdMask != 0) runCatching { unregisterReceiver(receiver) }
+        if (btRegistered) runCatching { unregisterReceiver(btReceiver) }
+        if (wifiRegistered) runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(netCallback) }
+        stdMask = 0
+        btRegistered = false
+        wifiRegistered = false
+        activeMask = 0
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
+        private const val EXTRA_MASK = "monitor_mask"
+        @Volatile private var currentMask = 0
         /** Whether the monitor is up (Doctor). */
         @Volatile var running = false
             private set
@@ -140,9 +221,10 @@ class RuleMonitorService : Service() {
         @Volatile var lastStartRefused = false
             private set
 
-        fun setRunning(context: Context, running: Boolean) {
-            val i = Intent(context, RuleMonitorService::class.java)
-            if (running) {
+        fun setRunning(context: Context, mask: Int) {
+            currentMask = mask
+            val i = Intent(context, RuleMonitorService::class.java).putExtra(EXTRA_MASK, mask)
+            if (mask != 0) {
                 lastStartRefused = runCatching { context.startForegroundService(i) }
                     .onFailure { android.util.Log.w("RuleMonitorService", "start refused", it) }.isFailure
             } else context.stopService(i)

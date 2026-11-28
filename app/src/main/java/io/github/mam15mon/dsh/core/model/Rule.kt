@@ -13,10 +13,22 @@ data class RuleSpec(
     val action: RuleAction,
     /** Tools the unattended run may use; anything else is refused. */
     val allowedTools: List<String> = emptyList(),
+    /** Minimum interval between automatic runs (seconds); 0 disables cooldown. */
+    val cooldownSeconds: Int = 60,
+    /** Whether successful runs post a notification (fixed steps) or allow turn notifications (agent). */
+    val notifyOnSuccess: Boolean = true,
+    /** Optional per-rule model override ("" = DeepSeek, non-empty = provider id; null modelId = follow default). */
+    val modelProvider: String? = null,
+    val modelId: String? = null,
+    val modelEffort: String? = null,
+    /** Optional per-rule working directory override for agent runs (null = follow default). */
+    val workspace: String? = null,
 )
 
 @Serializable
 sealed interface Trigger {
+    @Serializable @SerialName("manual")
+    data object Manual : Trigger
     @Serializable @SerialName("time")
     data class Time(val at: String? = null, val days: List<Int> = emptyList(), val everyMinutes: Int? = null, val onceAtEpochMs: Long? = null) : Trigger
     @Serializable @SerialName("wifi")

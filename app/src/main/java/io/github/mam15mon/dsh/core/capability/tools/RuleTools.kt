@@ -88,7 +88,11 @@ class RuleTools @Inject constructor(
             int("id", "Automation id", required = true)
         }) {
             override suspend fun invoke(args: JsonObject, call: CallContext): ToolResult {
-                hub.get().delete(args.long("id") ?: throw InvalidArgsException("id")); return ToolResult.text("Deleted")
+                if (call.unattended) throw InvalidArgsException("Automations cannot delete automations")
+                val id = args.long("id") ?: throw InvalidArgsException("missing 'id'")
+                rules.get(id) ?: throw InvalidArgsException("No automation #$id")
+                hub.get().delete(id)
+                return ToolResult.text("Deleted")
             }
         },
     )
@@ -96,17 +100,16 @@ class RuleTools @Inject constructor(
     private companion object {
         val RULE_DOC = """
 Create an automation. The app requests tool approval before saving.
-RuleSpec: {"name": str, "trigger": T, "conditions": [C...], "action": A, "allowedTools": [tool names the unattended run may use]}
+RuleSpec: {"name": str, "trigger": T, "conditions": [C...], "action": A, "allowedTools": [tools], "cooldownSeconds": 60, "notifyOnSuccess": true}
 T (pick one, field "type"):
- {"type":"time","at":"HH:mm" (24h, e.g. "07:30"),"days":[1..7 Mon=1, empty=every day]} | {"type":"time","everyMinutes":n>=15} | {"type":"time","onceAtEpochMs":ms}
+ {"type":"manual"} (run on demand) | {"type":"time","at":"HH:mm","days":[1..7 Mon=1, empty=daily]} | {"type":"time","everyMinutes":n>=15} | {"type":"time","onceAtEpochMs":ms}
  {"type":"wifi","connected":bool,"ssid":opt} | {"type":"bluetooth","connected":bool,"deviceName":opt}
- {"type":"power","connected":bool} | {"type":"battery_low","percent":n} (fires when the level drops to n while not charging) | {"type":"headset","plugged":bool}
- {"type":"screen","event":"on|off|unlock"} | {"type":"notification","packageName":opt,"keyword":opt} (with packageName the agent gets that app's notification text; without it, only apps on the read allowlist)
+ {"type":"power","connected":bool} | {"type":"battery_low","percent":n} | {"type":"headset","plugged":bool}
+ {"type":"screen","event":"on|off|unlock"} | {"type":"notification","packageName":opt,"keyword":opt} (named pkg shares text; empty uses allowlist)
  {"type":"app_opened","packageName":str} | {"type":"geofence","lat":d,"lng":d,"radiusM":200,"enter":bool}
 C: {"type":"time_range","from":"HH:mm","to":"HH:mm"} | {"type":"days","days":[..]} | {"type":"battery","min":n,"max":n} | {"type":"charging","charging":bool}
-A: {"type":"steps","steps":[{"tool":"sound_mode","args":{"mode":"silent"}}]}  (fixed tool calls, no model, preferred when possible)
- | {"type":"agent","prompt":"what the agent should do"}  (an unattended agent run; it can only use allowedTools and cannot ask the user)
-Screen tools wait for unlock. List every needed tool, including app_guide if needed for app navigation. Unlisted tools are hidden.
-The result lists missing trigger permissions.""".trim()
+A: {"type":"steps","steps":[{"tool":"sound_mode","args":{"mode":"silent"}}]} (fixed calls, preferred)
+ | {"type":"agent","prompt":"task"} (unattended; allowedTools only, no user questions)
+Screen tools wait for unlock; list all needed tools (e.g. app_guide). Returns missing permissions.""".trim()
     }
 }

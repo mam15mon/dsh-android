@@ -8,6 +8,7 @@ import dagger.hilt.components.SingletonComponent
 
 /** Raw device events, as seen by receivers/services. */
 sealed interface DeviceEvent {
+    data class Manual(val ruleId: Long) : DeviceEvent
     data class Time(val ruleId: Long) : DeviceEvent
     data class Wifi(val connected: Boolean, val ssid: String?) : DeviceEvent
     data class Bluetooth(val connected: Boolean, val deviceName: String?) : DeviceEvent

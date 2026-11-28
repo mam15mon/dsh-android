@@ -12,6 +12,7 @@ import io.github.mam15mon.dsh.core.engine.EngineManager
 import io.github.mam15mon.dsh.core.engine.RpcJson
 import io.github.mam15mon.dsh.core.model.RuleSpec
 import io.github.mam15mon.dsh.core.model.Trigger
+import io.github.mam15mon.dsh.core.trigger.RuleMatcher
 import io.github.mam15mon.dsh.core.trigger.RuleMonitorService
 import io.github.mam15mon.dsh.core.trigger.TriggerHub
 import io.github.mam15mon.dsh.service.DshInputMethodService
@@ -35,7 +36,8 @@ object ReliabilityDoctor {
         EngineDiagnostics.collectExitInfo(context)
         val specs = deps.rules().all().filter { it.enabled }.mapNotNull { runCatching { RpcJson.decodeFromString(RuleSpec.serializer(), it.specJson) }.getOrNull() }
         val out = mutableListOf<DoctorCheck>()
-        if (specs.isNotEmpty()) {
+        val backgroundSpecs = specs.filterNot { it.trigger is Trigger.Manual }
+        if (backgroundSpecs.isNotEmpty()) {
             val exempt = context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)
             val battery = PermissionCatalog.byId("battery")
             out += DoctorCheck(if (zh) "自动化：不受电池优化限制（必需）" else "Automations: unrestricted battery (required)", exempt,
@@ -44,8 +46,7 @@ object ReliabilityDoctor {
                     zh -> "未豁免时 Android 会拒绝在后台启动引擎，自动化只能降级为“点此执行”通知"
                     else -> "Without it Android refuses to start the engine from the background; automations degrade to a tap-to-run notification"
                 }, battery?.intent?.invoke(context))
-            val needsMonitor = specs.any { it.trigger is Trigger.Wifi || it.trigger is Trigger.Bluetooth || it.trigger is Trigger.Power ||
-                it.trigger is Trigger.BatteryLow || it.trigger is Trigger.Headset || it.trigger is Trigger.Screen }
+            val needsMonitor = RuleMatcher.monitorMask(backgroundSpecs) != 0
             if (needsMonitor) out += DoctorCheck(if (zh) "规则监听服务" else "Rule monitor", RuleMonitorService.running,
                 when {
                     RuleMonitorService.running -> if (zh) "运行中" else "Running"

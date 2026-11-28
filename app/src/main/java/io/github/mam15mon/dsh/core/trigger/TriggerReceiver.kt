@@ -72,8 +72,13 @@ class BootReceiver : BroadcastReceiver() {
     }
 
     private companion object {
-        // Exact-alarm access granted: re-sync so time rules become exact (a revoke kills the app; its next start re-syncs).
-        val ACTIONS = setOf(Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED,
-            "android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED")
+        // Exact-alarm access granted or clock/timezone changed: re-sync so time rules stay accurate.
+        val ACTIONS = setOf(
+            Intent.ACTION_BOOT_COMPLETED,
+            Intent.ACTION_MY_PACKAGE_REPLACED,
+            Intent.ACTION_TIME_CHANGED,
+            Intent.ACTION_TIMEZONE_CHANGED,
+            "android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED",
+        )
     }
 }

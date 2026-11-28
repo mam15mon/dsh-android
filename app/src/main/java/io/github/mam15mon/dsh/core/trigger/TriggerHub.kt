@@ -33,9 +33,11 @@ import android.os.Build
 import androidx.core.app.NotificationManagerCompat
 import io.github.mam15mon.dsh.core.data.SettingsRepository
 import io.github.mam15mon.dsh.service.DshAccessibilityService
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
@@ -44,13 +46,12 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.time.LocalDate
-import java.time.LocalDateTime
 import java.time.LocalTime
-import java.time.ZoneId
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.coroutines.resume
 
 /**
  * Automation engine: keeps OS registrations in sync with the enabled rules, matches incoming
@@ -92,7 +93,13 @@ class TriggerHub @Inject constructor(
     }
 
     suspend fun setEnabled(id: Long, enabled: Boolean) { rules.setEnabled(id, enabled); sync() }
-    suspend fun delete(id: Long) { runCatching { cancelAlarm(id); cancelGeofence(id) }; rules.delete(id); sync() }
+    suspend fun delete(id: Long) {
+        runCatching { cancelAlarm(id); cancelGeofence(id) }
+        rules.deleteRuns(id)
+        rules.delete(id)
+        lastFired.remove(id)
+        sync()
+    }
 
     fun editableTools(): List<String> = capabilities.allTools.keys.sorted()
 
@@ -103,9 +110,47 @@ class TriggerHub @Inject constructor(
             if (spec.action !is RuleAction.Agent) return false
             val allowed = (spec.allowedTools.toSet() - removed + added).sorted()
             val updated = RpcJson.encodeToString(RuleSpec.serializer(), spec.copy(allowedTools = allowed))
-            if (rules.replaceSpec(id, row.specJson, updated) == 1) return true
+            if (rules.replaceSpec(id, row.specJson, updated) == 1) {
+                sync()
+                return true
+            }
         }
         return false
+    }
+
+    suspend fun editSpec(id: Long, transform: (RuleSpec) -> RuleSpec): Result<RuleSpec> {
+        var lastError: Exception? = null
+        repeat(3) {
+            val row = rules.get(id) ?: return Result.failure(IllegalArgumentException("Automation #$id not found"))
+            val spec = decode(row) ?: return Result.failure(IllegalStateException("Invalid automation #$id"))
+            val next = try {
+                validate(transform(spec))
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                return Result.failure(e)
+            }
+            val encoded = RpcJson.encodeToString(RuleSpec.serializer(), next)
+            if (rules.replaceSpec(id, row.specJson, encoded) == 1) {
+                sync()
+                return Result.success(next)
+            }
+            lastError = ConcurrentModificationException("Automation #$id changed concurrently")
+        }
+        return Result.failure(lastError ?: IllegalStateException("Could not update automation #$id"))
+    }
+
+    data class ManualRunResult(val ok: Boolean, val sessionId: String? = null, val message: String = "")
+
+    suspend fun runNow(id: Long): ManualRunResult {
+        val e = rules.get(id) ?: return ManualRunResult(false, message = "Automation #$id not found")
+        val s = decode(e) ?: return ManualRunResult(false, message = "Invalid automation #$id")
+        return fire(e, s, DeviceEvent.Manual(id), manual = true)
+    }
+
+    fun nextFireAt(e: RuleEntity, s: RuleSpec, nowMs: Long = System.currentTimeMillis()): Long? {
+        if (!e.enabled) return null
+        val t = s.trigger as? Trigger.Time ?: return null
+        return RuleMatcher.nextFire(t, e.createdAt, e.lastFiredAt, nowMs)
     }
 
     /**
@@ -139,59 +184,63 @@ class TriggerHub @Inject constructor(
     /** Re-registers OS hooks for all enabled rules. Call at boot and after any change. Never throws. */
     suspend fun sync() = syncLock.withLock {
         val all = runCatching { rules.all() }.getOrElse { Log.e(TAG, "cannot read rules", it); return@withLock }
-        cache = all.filter { it.enabled }.mapNotNull { e -> decode(e)?.let { e to it } }
+        val now = System.currentTimeMillis()
+        val expiredOneShots = mutableSetOf<Long>()
+        cache = all.filter { it.enabled }.mapNotNull { e ->
+            val spec = decode(e) ?: return@mapNotNull null
+            val t = spec.trigger
+            if (t is Trigger.Time && t.onceAtEpochMs != null && RuleMatcher.nextFire(t, e.createdAt, e.lastFiredAt, now) == null) {
+                expiredOneShots += e.id
+                null
+            } else {
+                e to spec
+            }
+        }
+        expiredOneShots.forEach { id -> runCatching { rules.setEnabled(id, false) } }
         all.forEach { e -> runCatching { cancelAlarm(e.id) } }
         cache.forEach { (e, s) ->
             val t = s.trigger
-            if (t is Trigger.Time) runCatching { scheduleAlarm(e, t) }.onFailure { Log.w(TAG, "rule ${e.id}: cannot schedule", it) }
+            if (t is Trigger.Time) runCatching { scheduleAlarm(e, t, now) }.onFailure { Log.w(TAG, "rule ${e.id}: cannot schedule", it) }
         }
         runCatching { syncGeofences(all.map { it.id }, cache.mapNotNull { (e, s) -> (s.trigger as? Trigger.Geofence)?.let { e.id to it } }) }
             .onFailure { Log.w(TAG, "geofence sync failed", it) }
-        val needsMonitor = cache.any { it.second.trigger is Trigger.Wifi || it.second.trigger is Trigger.Bluetooth ||
-            it.second.trigger is Trigger.Power || it.second.trigger is Trigger.BatteryLow || it.second.trigger is Trigger.Headset || it.second.trigger is Trigger.Screen }
-        runCatching { RuleMonitorService.setRunning(context, needsMonitor) }
+        val mask = RuleMatcher.monitorMask(cache.map { it.second })
+        runCatching { RuleMonitorService.setRunning(context, mask) }
     }
 
     /**
-     * Matches [event] against the enabled rules. Time alarms are rescheduled first, then each matching
-     * rule fires in its own job, so a slow rule (waiting for an unlock) neither delays the next alarm
-     * nor blocks other rules. The returned job completes once dispatch is done (not the runs).
+     * Matches [event] against the enabled rules. Time alarms are rescheduled first (and one-shot
+     * timers auto-disabled), then each matching rule fires in its own job, so a slow rule (waiting
+     * for an unlock) neither delays the next alarm nor blocks other rules. The returned job completes
+     * once dispatch is done (not the runs).
      */
     fun onEvent(event: DeviceEvent): Job = scope.launch {
-        if (cache.isEmpty()) cache = rules.all().filter { it.enabled }.mapNotNull { e -> decode(e)?.let { e to it } }
+        if (cache.isEmpty()) sync()
+        var oneShotMatch: Pair<RuleEntity, RuleSpec>? = null
         if (event is DeviceEvent.Time) rules.get(event.ruleId)?.let { e ->
-            (decode(e)?.trigger as? Trigger.Time)?.let { t -> if (e.enabled) runCatching { scheduleAlarm(e.copy(lastFiredAt = System.currentTimeMillis()), t) } }
+            val s = decode(e)
+            val t = s?.trigger as? Trigger.Time
+            if (t != null && e.enabled) {
+                if (t.onceAtEpochMs != null) {
+                    oneShotMatch = e to s
+                    runCatching { rules.setEnabled(e.id, false) }
+                    cache = cache.filterNot { it.first.id == e.id }
+                } else {
+                    runCatching { scheduleAlarm(e.copy(lastFiredAt = System.currentTimeMillis()), t) }
+                }
+            }
         }
-        cache.filter { (e, s) -> runCatching { matches(e.id, s.trigger, event) && s.conditions.all(::holds) }
-            .onFailure { Log.w(TAG, "rule ${e.id}: cannot evaluate", it) }.getOrDefault(false) }
-            .forEach { (e, s) -> scope.launch { fire(e, s, event) } }
-    }
-
-    private fun matches(id: Long, t: Trigger, ev: DeviceEvent): Boolean = when (t) {
-        is Trigger.Time -> ev is DeviceEvent.Time && ev.ruleId == id
-        is Trigger.Geofence -> ev is DeviceEvent.Geofence && ev.ruleId == id && ev.entering == t.enter
-        is Trigger.Wifi -> ev is DeviceEvent.Wifi && ev.connected == t.connected && (t.ssid == null || t.ssid.equals(ev.ssid, true))
-        is Trigger.Bluetooth -> ev is DeviceEvent.Bluetooth && ev.connected == t.connected &&
-            (t.deviceName == null || ev.deviceName?.contains(t.deviceName, true) == true)
-        is Trigger.Power -> ev is DeviceEvent.Power && ev.connected == t.connected
-        // Fires when the level crosses down through the threshold while discharging (re-arms above it).
-        is Trigger.BatteryLow -> ev is DeviceEvent.Battery && !ev.charging && ev.previous != null && ev.previous > t.percent && ev.percent <= t.percent
-        is Trigger.Headset -> ev is DeviceEvent.Headset && ev.plugged == t.plugged
-        is Trigger.Screen -> ev is DeviceEvent.Screen && ev.event == t.event
-        is Trigger.Notification -> ev is DeviceEvent.Notification && (t.packageName == null || t.packageName == ev.packageName) &&
-            (t.keyword == null || "${ev.title} ${ev.text}".contains(t.keyword, true))
-        is Trigger.AppOpened -> ev is DeviceEvent.AppOpened && ev.packageName == t.packageName
-    }
-
-    /** Unparseable stored values (rules from before validation) make the condition false, never a crash. */
-    private fun holds(c: Condition): Boolean = when (c) {
-        is Condition.TimeRange -> {
-            val now = LocalTime.now(); val from = RuleTime.parse(c.from); val to = RuleTime.parse(c.to)
-            if (from == null || to == null) false else if (from <= to) now in from..to else now >= from || now <= to
-        }
-        is Condition.Days -> LocalDate.now().dayOfWeek.value in c.days
-        is Condition.Battery -> battery().let { (pct, _) -> (c.min == null || pct >= c.min) && (c.max == null || pct <= c.max) }
-        is Condition.Charging -> battery().second == c.charging
+        val candidates = (cache + listOfNotNull(oneShotMatch)).distinctBy { it.first.id }
+        val needBattery = candidates.any { (_, s) -> s.conditions.any { it is Condition.Battery || it is Condition.Charging } }
+        val batteryState = if (needBattery) battery() else (0 to false)
+        val nowTime = LocalTime.now()
+        val nowDate = LocalDate.now()
+        candidates.filter { (e, s) ->
+            runCatching {
+                RuleMatcher.matches(e.id, s.trigger, event) &&
+                    s.conditions.all { RuleMatcher.holds(it, nowTime, nowDate, batteryState.first, batteryState.second) }
+            }.onFailure { Log.w(TAG, "rule ${e.id}: cannot evaluate", it) }.getOrDefault(false)
+        }.forEach { (e, s) -> scope.launch { fire(e, s, event) } }
     }
 
     private fun battery(): Pair<Int, Boolean> {
@@ -200,19 +249,24 @@ class TriggerHub @Inject constructor(
         return pct to ((i?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0)
     }
 
-    private suspend fun fire(e: RuleEntity, s: RuleSpec, event: DeviceEvent) {
+    private suspend fun fire(e: RuleEntity, s: RuleSpec, event: DeviceEvent, manual: Boolean = false): ManualRunResult {
         val now = System.currentTimeMillis()
-        // Claim the debounce slot atomically before suspending: a notification burst (message + group
-        // summary, updates) must not run the same rule twice.
-        val claimed = lastFired.compute(e.id) { _, prev -> if (prev == null || now - prev >= DEBOUNCE_MS) now else prev }
-        if (claimed != now) return
-        if (rules.runsSince(e.id, now - 86_400_000L) >= DAILY_CAP) return
+        if (!manual) {
+            val cooldownMs = s.cooldownSeconds.coerceIn(0, 86_400) * 1000L
+            if (cooldownMs > 0L) {
+                // Claim the debounce slot atomically before suspending: a notification burst (message + group
+                // summary, updates) must not run the same rule twice.
+                val claimed = lastFired.compute(e.id) { _, prev -> if (prev == null || now - prev >= cooldownMs) now else prev }
+                if (claimed != now) return ManualRunResult(false, message = "cooldown")
+            }
+            if (rules.runsSince(e.id, now - 86_400_000L) >= DAILY_CAP) return ManualRunResult(false, message = "daily_cap")
+        }
         rules.setLastFired(e.id, now)
         val sessionId = "$AUTO_SESSION_PREFIX${e.id}_${UUID.randomUUID()}"
-        Log.i(TAG, "rule ${e.id} '${s.name}' fired by $event")
-        val outcome = try {
-            when (val a = s.action) {
-                is RuleAction.Steps -> {
+        Log.i(TAG, "rule ${e.id} '${s.name}' fired by $event (manual=$manual)")
+        when (val a = s.action) {
+            is RuleAction.Steps -> {
+                val outcome = try {
                     var failure: String? = null
                     for (step in a.steps) {
                         val r = capabilities.invoke(buildJsonObject {
@@ -221,33 +275,40 @@ class TriggerHub @Inject constructor(
                         if (!r.ok) { failure = "${step.tool}: ${r.errorMessage}"; break }
                     }
                     failure?.let { "failed: $it" } ?: "ok"
+                } catch (ex: CancellationException) {
+                    throw ex
+                } catch (ex: Exception) {
+                    Log.w(TAG, "rule ${e.id} failed", ex); "error: ${ex.message}"
                 }
-                is RuleAction.Agent -> {
+                rules.insertRun(RuleRunEntity(ruleId = e.id, firedAt = now, sessionId = null, outcome = outcome))
+                if (outcome != "ok" || s.notifyOnSuccess) {
+                    Notifications.post(context, Notifications.CHANNEL_TASKS, e.id.toInt() + 1000,
+                        context.getString(R.string.notif_rule_ran, s.name), outcome, null)
+                }
+                return ManualRunResult(outcome == "ok", null, outcome)
+            }
+            is RuleAction.Agent -> {
+                // Insert "started" row before prompt() so SessionStore updates always find a matching row.
+                rules.insertRun(RuleRunEntity(ruleId = e.id, firedAt = now, sessionId = sessionId, outcome = "started"))
+                return try {
                     sessions.get().prompt(sessionId, "[Automation \"${s.name}\" triggered by ${describe(s, event)}]\n${a.prompt}", ruleId = e.id)
-                    "started"
+                    ManualRunResult(true, sessionId, "started")
+                } catch (ex: CancellationException) {
+                    throw ex
+                } catch (ex: Exception) {
+                    Log.w(TAG, "rule ${e.id} failed", ex)
+                    val msg = "error: ${ex.message}"
+                    runCatching { rules.updateRunOutcome(sessionId, msg) }
+                    ManualRunResult(false, sessionId, msg)
                 }
             }
-        } catch (ex: kotlinx.coroutines.CancellationException) {
-            throw ex
-        } catch (ex: Exception) {
-            Log.w(TAG, "rule ${e.id} failed", ex); "error: ${ex.message}"
         }
-        rules.insertRun(RuleRunEntity(ruleId = e.id, firedAt = now, sessionId = sessionId.takeIf { s.action is RuleAction.Agent }, outcome = outcome))
-        if (outcome != "started") Notifications.post(context, Notifications.CHANNEL_TASKS, e.id.toInt() + 1000,
-            context.getString(R.string.notif_rule_ran, s.name), outcome, null)
     }
 
-    private suspend fun describe(s: RuleSpec, e: DeviceEvent) = when (e) {
-        is DeviceEvent.Notification -> {
-            // A rule bound to one app is the user's consent for that app; an "any app" rule only passes
-            // the text of apps the user has not blocked (Settings → Notifications).
-            val readable = (s.trigger as? Trigger.Notification)?.packageName != null || e.packageName !in settings.current().notificationBlocked
-            if (readable) "notification from ${e.packageName}: ${e.title} — ${e.text.take(500)}"
-            else "notification from ${e.packageName} (content hidden: the user blocked reading this app's notifications)"
-        }
-        is DeviceEvent.Wifi -> "Wi-Fi ${if (e.connected) "connected" else "disconnected"}${e.ssid?.let { " ($it)" } ?: ""}"
-        is DeviceEvent.Battery -> "battery at ${e.percent}%"
-        else -> e.toString()
+    private suspend fun describe(s: RuleSpec, e: DeviceEvent): String {
+        val readable = e is DeviceEvent.Notification &&
+            ((s.trigger as? Trigger.Notification)?.packageName != null || e.packageName !in settings.current().notificationBlocked)
+        return RuleMatcher.describeEvent(s, e, readable)
     }
 
     // ---- time --------------------------------------------------------------------------------
@@ -258,32 +319,11 @@ class TriggerHub @Inject constructor(
 
     private fun cancelAlarm(id: Long) = context.getSystemService(AlarmManager::class.java).cancel(alarmIntent(id))
 
-    private fun scheduleAlarm(e: RuleEntity, t: Trigger.Time) {
-        val next = nextFire(e, t) ?: return
+    private fun scheduleAlarm(e: RuleEntity, t: Trigger.Time, nowMs: Long = System.currentTimeMillis()) {
+        val next = RuleMatcher.nextFire(t, e.createdAt, e.lastFiredAt, nowMs) ?: return
         val am = context.getSystemService(AlarmManager::class.java)
         if (am.canExact()) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, next, alarmIntent(e.id))
         else am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, next, alarmIntent(e.id))
-    }
-
-    private fun nextFire(e: RuleEntity, t: Trigger.Time): Long? {
-        val now = System.currentTimeMillis()
-        t.onceAtEpochMs?.let { return it.takeIf { it > now } }
-        t.everyMinutes?.let { m ->
-            // Anchored to the last run (or creation), so re-syncing on every app start or edit does not
-            // keep pushing the next run into the future. A missed run fires a minute from now.
-            val period = m.coerceAtLeast(15) * 60_000L
-            val anchor = e.lastFiredAt ?: e.createdAt
-            val due = anchor + period
-            return if (due > now) due else now + 60_000L
-        }
-        val at = RuleTime.parse(t.at) ?: return null
-        var dt = LocalDateTime.of(LocalDate.now(), at)
-        repeat(8) {
-            if (dt.isAfter(LocalDateTime.now()) && (t.days.isEmpty() || dt.dayOfWeek.value in t.days))
-                return dt.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-            dt = dt.plusDays(1)
-        }
-        return null
     }
 
     // ---- geofence ------------------------------------------------------------------------------
@@ -309,25 +349,35 @@ class TriggerHub @Inject constructor(
     }
 
     /**
-     * Re-registers geofences. Play services: remove all of ours, and only add once the removal has
-     * completed (removal and add are async; unchained they could end with the fence removed).
+     * Re-registers geofences sequentially inside [syncLock] so removal and registration cannot race.
      */
-    private fun syncGeofences(allIds: List<Long>, fences: List<Pair<Long, Trigger.Geofence>>) {
+    private suspend fun syncGeofences(allIds: List<Long>, fences: List<Pair<Long, Trigger.Geofence>>) {
         val canLocate = context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         if (playServicesGeofencing) {
             val client = LocationServices.getGeofencingClient(context)
-            client.removeGeofences(gmsGeofenceIntent).addOnCompleteListener {
-                if (!canLocate || fences.isEmpty()) return@addOnCompleteListener
-                val request = GeofencingRequest.Builder().setInitialTrigger(0).apply {
-                    fences.forEach { (id, g) ->
-                        addGeofence(Geofence.Builder().setRequestId(id.toString()).setCircularRegion(g.lat, g.lng, g.radiusM)
-                            .setExpirationDuration(Geofence.NEVER_EXPIRE)
-                            .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER or Geofence.GEOFENCE_TRANSITION_EXIT).build())
-                    }
-                }.build()
+            suspendCancellableCoroutine<Unit> { cont ->
+                client.removeGeofences(gmsGeofenceIntent).addOnCompleteListener {
+                    if (cont.isActive) cont.resume(Unit)
+                }
+            }
+            if (!canLocate || fences.isEmpty()) return
+            val request = GeofencingRequest.Builder().setInitialTrigger(0).apply {
+                fences.forEach { (id, g) ->
+                    addGeofence(Geofence.Builder().setRequestId(id.toString()).setCircularRegion(g.lat, g.lng, g.radiusM)
+                        .setExpirationDuration(Geofence.NEVER_EXPIRE)
+                        .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER or Geofence.GEOFENCE_TRANSITION_EXIT).build())
+                }
+            }.build()
+            suspendCancellableCoroutine<Unit> { cont ->
                 @Suppress("MissingPermission")
-                runCatching { client.addGeofences(request, gmsGeofenceIntent).addOnFailureListener { Log.w(TAG, "geofences not registered", it) } }
-                    .onFailure { Log.w(TAG, "geofences not registered", it) }
+                runCatching {
+                    client.addGeofences(request, gmsGeofenceIntent)
+                        .addOnFailureListener { Log.w(TAG, "geofences not registered", it) }
+                        .addOnCompleteListener { if (cont.isActive) cont.resume(Unit) }
+                }.onFailure {
+                    Log.w(TAG, "geofences not registered", it)
+                    if (cont.isActive) cont.resume(Unit)
+                }
             }
             return
         }
@@ -345,7 +395,6 @@ class TriggerHub @Inject constructor(
 
     private companion object {
         const val TAG = "TriggerHub"
-        const val DEBOUNCE_MS = 60_000L
         const val DAILY_CAP = 50
     }
 }

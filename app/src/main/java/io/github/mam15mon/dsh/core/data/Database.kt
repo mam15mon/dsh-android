@@ -150,7 +150,11 @@ interface RuleDao {
     suspend fun setLastFired(id: Long, time: Long)
     @Query("DELETE FROM rules WHERE id = :id")
     suspend fun delete(id: Long)
+    @Query("DELETE FROM rule_runs WHERE ruleId = :ruleId")
+    suspend fun deleteRuns(ruleId: Long)
     @Insert suspend fun insertRun(r: RuleRunEntity)
+    @Query("UPDATE rule_runs SET outcome = :outcome WHERE sessionId = :sessionId")
+    suspend fun updateRunOutcome(sessionId: String, outcome: String)
     @Query("SELECT * FROM rule_runs WHERE ruleId = :ruleId ORDER BY firedAt DESC LIMIT 20")
     fun runs(ruleId: Long): Flow<List<RuleRunEntity>>
     @Query("SELECT COUNT(*) FROM rule_runs WHERE ruleId = :ruleId AND firedAt > :since")

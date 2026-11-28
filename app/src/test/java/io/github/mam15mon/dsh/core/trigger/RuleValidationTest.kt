@@ -62,4 +62,34 @@ class RuleValidationTest {
             assertEquals(listOf(tool), agent.allowedTools)
         }
     }
+
+    @Test fun validatesManualCooldownModelAndWorkspace() {
+        val spec = validateRule(
+            RuleSpec(
+                name = "Check repo",
+                trigger = Trigger.Manual,
+                action = RuleAction.Agent("git status"),
+                cooldownSeconds = 0,
+                notifyOnSuccess = false,
+                modelProvider = " ",
+                modelId = " deepseek-flash ",
+                workspace = " /sdcard/proj/ ",
+            ),
+            tools,
+        )
+        assertEquals("", spec.modelProvider)
+        assertEquals("deepseek-flash", spec.modelId)
+        assertEquals("/sdcard/proj", spec.workspace)
+
+        listOf(
+            spec.copy(cooldownSeconds = -1),
+            spec.copy(cooldownSeconds = 86_401),
+            spec.copy(workspace = "relative/path"),
+        ).forEach { bad ->
+            try {
+                validateRule(bad, tools)
+                fail("accepted invalid spec $bad")
+            } catch (_: RuleSpecException) {}
+        }
+    }
 }

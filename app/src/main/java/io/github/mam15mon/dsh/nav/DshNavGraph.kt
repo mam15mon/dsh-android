@@ -59,9 +59,22 @@ fun NavGraphBuilder.dshGraph(nav: NavHostController, home: () -> HomeViewModel) 
         if (account != null && page != null) PlatformWebScreen(page, account) else Box(Modifier.fillMaxSize().background(Dsh.colors.bgBase))
     }
     composable<AutomationRoute> { e ->
-        AutomationScreen(onBack = { nav.up(e) }, onNew = { prefill -> home().newSession(prefill); nav.toHome() }, onOpenRule = { open(RuleRoute(it.toString())) })
+        AutomationScreen(
+            onBack = { nav.up(e) },
+            onNew = { prefill -> home().newSession(prefill); nav.toHome() },
+            onOpenRule = { open(RuleRoute(it.toString())) },
+            onOpenSession = { sid -> home().open(sid); nav.toHome() },
+            onOpenPermissions = { nav.openSettings(SettingsSection.Phone.name) },
+        )
     }
-    composable<RuleRoute> { e -> RuleDetailScreen(onBack = { nav.up(e) }, onOpenSession = { sid -> home().open(sid); nav.toHome() }) }
+    composable<RuleRoute> { e ->
+        RuleDetailScreen(
+            onBack = { nav.up(e) },
+            onOpenSession = { sid -> home().open(sid); nav.toHome() },
+            onEditInChat = { prefill -> home().newSession(prefill); nav.toHome() },
+            onOpenPermissions = { nav.openSettings(SettingsSection.Phone.name) },
+        )
+    }
     navigation<SettingsGraph>(startDestination = SettingsRoute) {
         composable<SettingsRoute> { e -> InSettings(nav, e) { SettingsIndexScreen(onBack = { nav.up(e) }, open = open) } }
         composable<SectionRoute> { e ->

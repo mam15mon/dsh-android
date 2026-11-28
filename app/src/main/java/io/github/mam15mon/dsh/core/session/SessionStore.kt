@@ -312,12 +312,24 @@ class SessionStore @Inject constructor(
         val retryText = text.takeUnless { appPrompt }
         if (existing?.parentId == null) ownedRoots += sessionId
         // A conversation the user starts keeps its own model from now on (#53): the one picked in the
-        // composer, else a copy of the default. Automation runs keep following the default.
-        val ownModel = live.model ?: settings.current().takeIf { existing == null && ruleId == null && ruleIdOfSession(sessionId) == null }?.let(SessionModels::default)
-        val ownWorkspace = SessionWorkspaces.initial(live.workspace, io.github.mam15mon.dsh.nativeextra.NativeRoot.selected(context), io.github.mam15mon.dsh.nativeextra.NativeRoot.enabled(context))
-        if (existing == null) dao.upsert(SessionEntity(sessionId, text.lineSequence().first().take(40), now, now, ruleId, running = true, preset = live.preset.id, modeId = live.modeId,
-            modelProvider = ownModel?.provider, modelId = ownModel?.model, modelEffort = ownModel?.effort, workspace = ownWorkspace))
-        else dao.setRunning(sessionId, true)
+        // composer, else a copy of the default. Automation runs use their per-rule override if any, else follow default.
+        val effectiveRuleId = ruleId ?: ruleIdOfSession(sessionId)
+        val ruleSpec = if (existing == null && effectiveRuleId != null) {
+            rules.get(effectiveRuleId)?.let { runCatching { RpcJson.decodeFromString(RuleSpec.serializer(), it.specJson) }.getOrNull() }
+        } else null
+        val ownModel = live.model
+            ?: ruleSpec?.modelId?.let { SessionModel(ruleSpec.modelProvider.orEmpty(), it, ruleSpec.modelEffort) }
+            ?: settings.current().takeIf { existing == null && effectiveRuleId == null }?.let(SessionModels::default)
+        val ownWorkspace = ruleSpec?.workspace
+            ?: SessionWorkspaces.initial(live.workspace, io.github.mam15mon.dsh.nativeextra.NativeRoot.selected(context), io.github.mam15mon.dsh.nativeextra.NativeRoot.enabled(context))
+        if (existing == null) {
+            val title = ruleSpec?.name?.takeIf { it.isNotBlank() } ?: text.lineSequence().first().take(40)
+            dao.upsert(SessionEntity(sessionId, title, now, now, ruleId, running = true, muted = ruleSpec?.let { !it.notifyOnSuccess } ?: false,
+                preset = live.preset.id, modeId = live.modeId, modelProvider = ownModel?.provider, modelId = ownModel?.model, modelEffort = ownModel?.effort, workspace = ownWorkspace))
+        } else {
+            dao.setRunning(sessionId, true)
+            if (effectiveRuleId != null) runCatching { rules.updateRunOutcome(sessionId, "started") }
+        }
         // Steering a running session keeps it an engine run (no startingEngine): see hasEngineRuns.
         mutate(sessionId) { it.copy(running = true, exists = true, runStartedAt = it.runStartedAt.takeIf { _ -> live.running } ?: now,
             startingEngine = it.startingEngine || !live.running, waitingForNetwork = false, model = it.model ?: ownModel, workspace = it.workspace ?: ownWorkspace) }
@@ -370,7 +382,7 @@ class SessionStore @Inject constructor(
             // Android 12+ refused the engine's foreground service from the background (e.g. battery
             // optimization re-enabled): degrade to a notification that runs the task when tapped.
             val rule = ruleId ?: ruleIdOfSession(sessionId)
-            fail(sessionId, "engine", context.getString(R.string.err_bg_start), null, retryText)
+            fail(sessionId, "engine", context.getString(R.string.err_bg_start), null, retryText, runOutcome = "deferred")
             val label = rule?.let { rules.get(it) }?.let { runCatching { RpcJson.decodeFromString(RuleSpec.serializer(), it.specJson).name }.getOrNull() }
                 ?: dao.get(sessionId)?.title ?: text.take(40)
             DeferredRuns.post(context, sessionId, text, rule, label)
@@ -456,9 +468,12 @@ class SessionStore @Inject constructor(
         prompt(sessionId, CONTINUE_TASK, ruleIdOfSession(sessionId))
     }
 
-    private suspend fun fail(sessionId: String, kind: String, message: String, code: String?, retryText: String?) {
+    private suspend fun fail(sessionId: String, kind: String, message: String, code: String?, retryText: String?, runOutcome: String? = null) {
         if (stopping) return
         dao.setRunning(sessionId, false)
+        if (ruleIdOfSession(sessionId) != null) {
+            runCatching { rules.updateRunOutcome(sessionId, runOutcome ?: "failed: ${message.take(200)}") }
+        }
         appendLocal(sessionId, "app/error", buildJsonObject {
             put("kind", kind); put("message", message)
             code?.let { put("code", it) }
@@ -503,6 +518,7 @@ class SessionStore @Inject constructor(
             cancelPending()
             running.forEach { id ->
                 dao.setRunning(id, false)
+                if (ruleIdOfSession(id) != null) runCatching { rules.updateRunOutcome(id, "stopped") }
                 autoContinued.remove(id)
                 appendLocal(id, "app/stopped", JsonObject(emptyMap()))
                 mutate(id) { it.idle() }
@@ -975,6 +991,25 @@ class SessionStore @Inject constructor(
             return
         }
         if (states.values.none { it.value.running }) engine.scheduleIdleShutdown()
+        if (ruleIdOfSession(sessionId) != null) {
+            val terminal = live.events.lastOrNull {
+                it.type == "turn/start" || it.type == "turn/end" || it.type == "app/stopped" || it.type == "app/error"
+            }
+            val finalOutcome = when (terminal?.type) {
+                "turn/end" -> {
+                    val reason = terminal.data.o("reason")
+                    when (reason?.s("kind")) {
+                        "error" -> "failed: ${(reason.o("error")?.s("message") ?: reason.o("error")?.s("code") ?: "error").take(200)}"
+                        "cancelled" -> "stopped"
+                        else -> "ok"
+                    }
+                }
+                "app/stopped" -> "stopped"
+                "app/error" -> "failed: ${(terminal.data.s("message") ?: "error").take(200)}"
+                else -> "ok"
+            }
+            runCatching { rules.updateRunOutcome(sessionId, finalOutcome) }
+        }
         // Only the user's own conversations (#43): a plugin's background session has no row, a subagent has a parent.
         val row = dao.get(sessionId) ?: return
         if (!SessionVisibility.userFacing(sessionId, row)) return
