@@ -36,7 +36,7 @@ object ReliabilityDoctor {
         EngineDiagnostics.collectExitInfo(context)
         val specs = deps.rules().all().filter { it.enabled }.mapNotNull { runCatching { RpcJson.decodeFromString(RuleSpec.serializer(), it.specJson) }.getOrNull() }
         val out = mutableListOf<DoctorCheck>()
-        val backgroundSpecs = specs.filterNot { it.trigger is Trigger.Manual }
+        val backgroundSpecs = specs.filter { s -> s.allTriggers.any { it !is Trigger.Manual } }
         if (backgroundSpecs.isNotEmpty()) {
             val exempt = context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)
             val battery = PermissionCatalog.byId("battery")
@@ -53,7 +53,7 @@ object ReliabilityDoctor {
                     RuleMonitorService.lastStartRefused -> if (zh) "系统拒绝在后台启动；打开 DSH 一次或授予电池豁免" else "Start refused in the background; open DSH or grant the battery exemption"
                     else -> if (zh) "未运行" else "Not running"
                 })
-            if (specs.any { it.trigger is Trigger.Geofence }) {
+            if (specs.any { s -> s.allTriggers.any { it is Trigger.Geofence } }) {
                 val gms = deps.triggers().playServicesGeofencing
                 out += DoctorCheck(if (zh) "地点触发" else "Place triggers", if (gms) true else null,
                     if (gms) (if (zh) "使用 Google Play 服务地理围栏" else "Google Play services geofencing")

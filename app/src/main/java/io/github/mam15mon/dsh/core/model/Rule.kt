@@ -23,7 +23,11 @@ data class RuleSpec(
     val modelEffort: String? = null,
     /** Optional per-rule working directory override for agent runs (null = follow default). */
     val workspace: String? = null,
-)
+    /** Additional triggers (OR semantics: any trigger in [allTriggers] firing evaluates [conditions]). */
+    val extraTriggers: List<Trigger> = emptyList(),
+) {
+    val allTriggers: List<Trigger> get() = listOf(trigger) + extraTriggers
+}
 
 @Serializable
 sealed interface Trigger {
@@ -44,7 +48,7 @@ sealed interface Trigger {
     @Serializable @SerialName("screen")
     data class Screen(val event: String /* on | off | unlock */) : Trigger
     @Serializable @SerialName("notification")
-    data class Notification(val packageName: String? = null, val keyword: String? = null) : Trigger
+    data class Notification(val packageName: String? = null, val keyword: String? = null, val excludeKeyword: String? = null) : Trigger
     @Serializable @SerialName("app_opened")
     data class AppOpened(val packageName: String) : Trigger
     @Serializable @SerialName("geofence")
@@ -61,6 +65,12 @@ sealed interface Condition {
     data class Battery(val min: Int? = null, val max: Int? = null) : Condition
     @Serializable @SerialName("charging")
     data class Charging(val charging: Boolean) : Condition
+    @Serializable @SerialName("wifi")
+    data class Wifi(val connected: Boolean, val ssid: String? = null) : Condition
+    @Serializable @SerialName("screen")
+    data class Screen(val state: String /* on | off | unlocked | locked */) : Condition
+    @Serializable @SerialName("bluetooth")
+    data class Bluetooth(val connected: Boolean) : Condition
 }
 
 @Serializable

@@ -21,7 +21,7 @@ import java.time.ZonedDateTime
 class RuleMatcherTest {
     private val utc = ZoneId.of("UTC")
 
-    @Test fun matchesAllTriggerTypesIncludingManualAndWifiWithoutSsid() {
+    @Test fun matchesAllTriggerTypesIncludingManualExcludeAndSlots() {
         assertTrue(RuleMatcher.matches(7, Trigger.Manual, DeviceEvent.Manual(7)))
         assertFalse(RuleMatcher.matches(7, Trigger.Manual, DeviceEvent.Manual(8)))
         assertTrue(RuleMatcher.matches(1, Trigger.Wifi(connected = true, ssid = null), DeviceEvent.Wifi(true, null)))
@@ -30,24 +30,80 @@ class RuleMatcherTest {
         assertTrue(RuleMatcher.matches(2, Trigger.BatteryLow(20), DeviceEvent.Battery(percent = 20, previous = 21, charging = false)))
         assertFalse(RuleMatcher.matches(2, Trigger.BatteryLow(20), DeviceEvent.Battery(percent = 20, previous = 21, charging = true)))
         assertFalse(RuleMatcher.matches(2, Trigger.BatteryLow(20), DeviceEvent.Battery(percent = 19, previous = 20, charging = false)))
-        assertTrue(RuleMatcher.matches(3, Trigger.Notification("com.chat", "urgent"), DeviceEvent.Notification("com.chat", "URGENT ping", "hello")))
-        assertFalse(RuleMatcher.matches(3, Trigger.Notification("com.chat", "urgent"), DeviceEvent.Notification("com.other", "URGENT ping", "hello")))
+        assertTrue(RuleMatcher.matches(3, Trigger.Notification("com.chat", "urgent", "spam"), DeviceEvent.Notification("com.chat", "URGENT ping", "hello")))
+        assertFalse(RuleMatcher.matches(3, Trigger.Notification("com.chat", "urgent", "spam"), DeviceEvent.Notification("com.chat", "URGENT spam", "hello")))
+        assertFalse(RuleMatcher.matches(3, Trigger.Notification("com.chat", "urgent", "spam"), DeviceEvent.Notification("com.other", "URGENT ping", "hello")))
     }
 
-    @Test fun holdsHandlesNormalAndCrossMidnightTimeRanges() {
+    @Test fun matchRuleSupportsOrExtraTriggersAndIndexedAlarmsGeofences() {
+        val spec = RuleSpec(
+            name = "Twice daily or headset",
+            trigger = Trigger.Time(at = "08:30"),
+            extraTriggers = listOf(
+                Trigger.Time(at = "18:30"),
+                Trigger.Notification("com.chat.a", keyword = "urgent"),
+                Trigger.Geofence(31.2, 121.4, enter = true),
+            ),
+            action = RuleAction.Agent("summarize"),
+        )
+        assertEquals(0, RuleMatcher.matchRule(5, spec, DeviceEvent.Time(5, triggerIndex = 0))?.index)
+        assertEquals(1, RuleMatcher.matchRule(5, spec, DeviceEvent.Time(5, triggerIndex = 1))?.index)
+        assertNull(RuleMatcher.matchRule(5, spec, DeviceEvent.Time(5, triggerIndex = 2)))
+        assertEquals(2, RuleMatcher.matchRule(5, spec, DeviceEvent.Notification("com.chat.a", "Urgent", "msg"))?.index)
+        assertEquals(3, RuleMatcher.matchRule(5, spec, DeviceEvent.Geofence(5, entering = true, triggerIndex = 3))?.index)
+        assertNull(RuleMatcher.matchRule(5, spec, DeviceEvent.Geofence(5, entering = true, triggerIndex = 0)))
+
+        assertEquals(12L to 2, RuleMatcher.parseGeofenceRequestId(RuleMatcher.geofenceRequestId(12L, 2)))
+        assertEquals(12L to 0, RuleMatcher.parseGeofenceRequestId("12"))
+    }
+
+    @Test fun holdsHandlesTimeBatteryWifiScreenAndBluetoothConditions() {
         val monday = LocalDate.of(2026, 11, 23)
-        assertTrue(RuleMatcher.holds(Condition.TimeRange("08:00", "18:00"), LocalTime.of(12, 0), monday, 80, false))
-        assertFalse(RuleMatcher.holds(Condition.TimeRange("08:00", "18:00"), LocalTime.of(22, 0), monday, 80, false))
-        assertTrue(RuleMatcher.holds(Condition.TimeRange("22:00", "07:00"), LocalTime.of(23, 30), monday, 80, false))
-        assertTrue(RuleMatcher.holds(Condition.TimeRange("22:00", "07:00"), LocalTime.of(6, 15), monday, 80, false))
-        assertFalse(RuleMatcher.holds(Condition.TimeRange("22:00", "07:00"), LocalTime.of(12, 0), monday, 80, false))
-        assertTrue(RuleMatcher.holds(Condition.Days(listOf(1, 5)), LocalTime.NOON, monday, 50, true))
-        assertFalse(RuleMatcher.holds(Condition.Days(listOf(2)), LocalTime.NOON, monday, 50, true))
-        assertTrue(RuleMatcher.holds(Condition.Battery(min = 20, max = 80), LocalTime.NOON, monday, 50, true))
-        assertFalse(RuleMatcher.holds(Condition.Charging(true), LocalTime.NOON, monday, 50, false))
+        val officeUnlocked = DeviceState(
+            batteryPct = 50,
+            charging = true,
+            wifiConnected = true,
+            wifiSsid = "Office",
+            screenInteractive = true,
+            keyguardLocked = false,
+            bluetoothConnected = true,
+        )
+        val offlineLocked = DeviceState(
+            batteryPct = 50,
+            charging = false,
+            wifiConnected = false,
+            wifiSsid = null,
+            screenInteractive = false,
+            keyguardLocked = true,
+            bluetoothConnected = false,
+        )
+        assertTrue(RuleMatcher.holds(Condition.TimeRange("08:00", "18:00"), LocalTime.of(12, 0), monday, officeUnlocked))
+        assertFalse(RuleMatcher.holds(Condition.TimeRange("08:00", "18:00"), LocalTime.of(22, 0), monday, officeUnlocked))
+        assertTrue(RuleMatcher.holds(Condition.TimeRange("22:00", "07:00"), LocalTime.of(23, 30), monday, officeUnlocked))
+        assertTrue(RuleMatcher.holds(Condition.TimeRange("22:00", "07:00"), LocalTime.of(6, 15), monday, officeUnlocked))
+        assertFalse(RuleMatcher.holds(Condition.TimeRange("22:00", "07:00"), LocalTime.of(12, 0), monday, officeUnlocked))
+        assertTrue(RuleMatcher.holds(Condition.Days(listOf(1, 5)), LocalTime.NOON, monday, officeUnlocked))
+        assertFalse(RuleMatcher.holds(Condition.Days(listOf(2)), LocalTime.NOON, monday, officeUnlocked))
+        assertTrue(RuleMatcher.holds(Condition.Battery(min = 20, max = 80), LocalTime.NOON, monday, officeUnlocked))
+        assertFalse(RuleMatcher.holds(Condition.Charging(true), LocalTime.NOON, monday, offlineLocked))
+
+        assertTrue(RuleMatcher.holds(Condition.Wifi(true, "office"), LocalTime.NOON, monday, officeUnlocked))
+        assertFalse(RuleMatcher.holds(Condition.Wifi(true, "office"), LocalTime.NOON, monday, officeUnlocked.copy(wifiSsid = null)))
+        assertTrue(RuleMatcher.holds(Condition.Wifi(false), LocalTime.NOON, monday, offlineLocked))
+        assertTrue(RuleMatcher.holds(Condition.Wifi(false, "Office"), LocalTime.NOON, monday, offlineLocked))
+        assertFalse(RuleMatcher.holds(Condition.Wifi(false, "Office"), LocalTime.NOON, monday, officeUnlocked.copy(wifiSsid = null)))
+
+        assertTrue(RuleMatcher.holds(Condition.Screen("on"), LocalTime.NOON, monday, officeUnlocked))
+        assertTrue(RuleMatcher.holds(Condition.Screen("unlocked"), LocalTime.NOON, monday, officeUnlocked))
+        assertFalse(RuleMatcher.holds(Condition.Screen("unlocked"), LocalTime.NOON, monday, officeUnlocked.copy(keyguardLocked = true)))
+        assertTrue(RuleMatcher.holds(Condition.Screen("locked"), LocalTime.NOON, monday, officeUnlocked.copy(keyguardLocked = true)))
+        assertTrue(RuleMatcher.holds(Condition.Screen("off"), LocalTime.NOON, monday, offlineLocked))
+
+        assertTrue(RuleMatcher.holds(Condition.Bluetooth(true), LocalTime.NOON, monday, officeUnlocked))
+        assertFalse(RuleMatcher.holds(Condition.Bluetooth(true), LocalTime.NOON, monday, offlineLocked))
     }
 
-    @Test fun nextFireComputesScheduledPeriodicAndOneShotTimes() {
+    @Test fun nextFireComputesSingleAndEarliestMultiTimeTrigger() {
         val monMorning = ZonedDateTime.of(2026, 11, 23, 8, 0, 0, 0, utc).toInstant().toEpochMilli()
         val friSameTime = RuleMatcher.nextFire(Trigger.Time(at = "08:00", days = listOf(5)), 0L, null, monMorning, utc)
         assertNotNull(friSameTime)
@@ -65,41 +121,61 @@ class RuleMatcherTest {
         val futureOnce = Instant.ofEpochMilli(monMorning + 10_000L).toEpochMilli()
         assertEquals(futureOnce, RuleMatcher.nextFire(Trigger.Time(onceAtEpochMs = futureOnce), 0L, null, monMorning, utc))
         assertNull(RuleMatcher.nextFire(Trigger.Time(onceAtEpochMs = monMorning - 1), 0L, null, monMorning, utc))
+
+        val multiTimeSpec = RuleSpec(
+            name = "Multi time",
+            trigger = Trigger.Time(at = "18:30"),
+            extraTriggers = listOf(Trigger.Time(at = "09:15")),
+            action = RuleAction.Steps(listOf(Step("sound_mode"))),
+        )
+        assertEquals(
+            ZonedDateTime.of(2026, 11, 23, 9, 15, 0, 0, utc).toInstant().toEpochMilli(),
+            RuleMatcher.nextFire(multiTimeSpec, 0L, null, monMorning, utc),
+        )
     }
 
-    @Test fun monitorMaskOnlyEnablesNeededBroadcastCategories() {
+    @Test fun monitorMaskCoversPrimaryAndExtraTriggers() {
         val stepAction = RuleAction.Steps(listOf(Step("sound_mode")))
         assertEquals(0, RuleMatcher.monitorMask(listOf(
             RuleSpec("t", Trigger.Time(at = "07:00"), action = stepAction),
             RuleSpec("m", Trigger.Manual, action = stepAction),
             RuleSpec("n", Trigger.Notification(), action = stepAction),
         )))
-        val expected = RuleMatcher.FLAG_WIFI or RuleMatcher.FLAG_POWER
+        val expected = RuleMatcher.FLAG_WIFI or RuleMatcher.FLAG_POWER or RuleMatcher.FLAG_HEADSET
         assertEquals(expected, RuleMatcher.monitorMask(listOf(
-            RuleSpec("w", Trigger.Wifi(true), action = stepAction),
+            RuleSpec("w", Trigger.Wifi(true), extraTriggers = listOf(Trigger.Headset(true)), action = stepAction),
             RuleSpec("p", Trigger.Power(false), action = stepAction),
         )))
     }
 
-    @Test fun describeEventFormatsReadableTextForAllEvents() {
-        val spec = RuleSpec("demo", Trigger.Manual, action = RuleAction.Agent("go"))
+    @Test fun describeEventFormatsReadableTextForAllEventsAndMatchedTrigger() {
+        val spec = RuleSpec(
+            "demo",
+            Trigger.Time(at = "08:00"),
+            extraTriggers = listOf(Trigger.Time(at = "20:00")),
+            action = RuleAction.Agent("go"),
+        )
         assertEquals("manual run", RuleMatcher.describeEvent(spec, DeviceEvent.Manual(1), readableNotification = true))
+        assertEquals("scheduled time (20:00)", RuleMatcher.describeEvent(spec, DeviceEvent.Time(1, 1), readableNotification = true, matchedTrigger = Trigger.Time(at = "20:00")))
         assertEquals("app opened (com.example)", RuleMatcher.describeEvent(spec, DeviceEvent.AppOpened("com.example"), readableNotification = true))
         assertEquals("entered geofence", RuleMatcher.describeEvent(spec, DeviceEvent.Geofence(1, true), readableNotification = true))
         assertTrue(RuleMatcher.describeEvent(spec, DeviceEvent.Notification("a", "hi", "body"), readableNotification = false).contains("content hidden"))
     }
 
-    @Test fun ruleSpecSerializationRemainsBackwardsCompatibleAndSupportsManual() {
+    @Test fun ruleSpecSerializationRemainsBackwardsCompatibleAndSupportsMultiTriggerConditions() {
         val legacyJson = """{"name":"Legacy","trigger":{"type":"power","connected":true},"action":{"type":"steps","steps":[{"tool":"sound_mode"}]}}"""
         val decoded = RpcJson.decodeFromString(RuleSpec.serializer(), legacyJson)
+        assertTrue(decoded.extraTriggers.isEmpty())
         assertEquals(60, decoded.cooldownSeconds)
         assertTrue(decoded.notifyOnSuccess)
         assertNull(decoded.modelId)
         assertNull(decoded.workspace)
 
-        val manual = RuleSpec(
-            name = "Daily recap",
-            trigger = Trigger.Manual,
+        val multi = RuleSpec(
+            name = "Work alert",
+            trigger = Trigger.Notification(packageName = "com.wecom", keyword = "urgent", excludeKeyword = "bot"),
+            extraTriggers = listOf(Trigger.Notification(packageName = "com.dingtalk", keyword = "urgent")),
+            conditions = listOf(Condition.Wifi(true, "Office"), Condition.Screen("unlocked"), Condition.Bluetooth(true)),
             action = RuleAction.Agent("summarize"),
             cooldownSeconds = 0,
             notifyOnSuccess = false,
@@ -107,8 +183,8 @@ class RuleMatcherTest {
             modelId = "deepseek-flash",
             workspace = "",
         )
-        val encoded = RpcJson.encodeToString(RuleSpec.serializer(), manual)
+        val encoded = RpcJson.encodeToString(RuleSpec.serializer(), multi)
         val roundTrip = RpcJson.decodeFromString(RuleSpec.serializer(), encoded)
-        assertEquals(manual, roundTrip)
+        assertEquals(multi, roundTrip)
     }
 }

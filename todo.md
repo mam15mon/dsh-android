@@ -50,6 +50,11 @@
   - **执行与配置能力扩展**：`RuleSpec` 向后兼容新增 `cooldownSeconds`、`notifyOnSuccess`、`modelProvider`/`modelId`/`modelEffort`、`workspace`，`Trigger` 新增 `Trigger.Manual`（手动触发）；`SessionStore` 在自动会话创建、失败、降级、停止、完成时真实回写 `rule_runs.outcome` 并应用规则级模型/工作目录/静默配置；`RuleTools.rule_delete` 补齐 `unattended` 与存在性校验。
   - **UI 与测试补全**：`AutomationScreen` / `RuleDetailScreen` 新增 5 个快捷模板、缺失权限高亮标签与一键跳转、下次预计触发时间、手动一键运行、「立即运行」/「快速编辑」弹窗（改名称/时间/关键词/Prompt/冷却/成功通知/模型/工作项目）/「对话修改」及 5 种运行态映射；新建 `RuleMatcher.kt` 与 `RuleMatcherTest.kt` 并扩充 `RuleValidationTest.kt`。
 
+- [x] **自动化支持多触发器（OR）与扩展状态条件（AND）**
+  - `RuleSpec` 新增 `extraTriggers`（最多共 8 个触发器，任一命中即触发，独立管理多定时/多围栏 `triggerIndex` 槽位）；`Trigger.Notification` 新增 `excludeKeyword` 排除词。
+  - `Condition` 新增 `wifi`、`screen`（`on`/`off`/`unlocked`/`locked`）、`bluetooth` 持续状态条件，接入 `TriggerHub.collectDeviceState()` 懒采集系统状态。
+  - 列表/详情 UI 展示多触发标签、排除词与新条件，并同步更新 `RuleTools.RULE_DOC`、三语资源与单测。
+
 ## 待办 / 需确认项
 
 - [ ] **R8 混淆与资源裁剪真机验证**（`app/build.gradle.kts` 当前保持 `isMinifyEnabled = false` / `isShrinkResources = false`；开启前需在真机上完整验证 JNI、Shizuku、RootService 反射与序列化流程）。

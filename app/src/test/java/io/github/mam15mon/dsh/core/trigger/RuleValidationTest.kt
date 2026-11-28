@@ -92,4 +92,37 @@ class RuleValidationTest {
             } catch (_: RuleSpecException) {}
         }
     }
+
+    @Test fun validatesExtraTriggersNewConditionsAndMaxLimit() {
+        val spec = validateRule(
+            RuleSpec(
+                name = "Morning or evening",
+                trigger = Trigger.Time(at = "8:30"),
+                extraTriggers = listOf(
+                    Trigger.Time(at = "18:05"),
+                    Trigger.Notification(packageName = " ", keyword = " vip ", excludeKeyword = " ad "),
+                ),
+                conditions = listOf(
+                    Condition.Wifi(connected = true, ssid = " Home "),
+                    Condition.Screen("unlocked"),
+                    Condition.Bluetooth(false),
+                ),
+                action = RuleAction.Agent("report"),
+            ),
+            tools,
+        )
+        assertEquals("08:30", (spec.trigger as Trigger.Time).at)
+        assertEquals("18:05", (spec.extraTriggers[0] as Trigger.Time).at)
+        assertEquals(Trigger.Notification(null, "vip", "ad"), spec.extraTriggers[1])
+        assertEquals(Condition.Wifi(true, "Home"), spec.conditions[0])
+
+        val tooMany = spec.copy(extraTriggers = List(MAX_RULE_TRIGGERS) { Trigger.Manual })
+        val badScreen = spec.copy(conditions = listOf(Condition.Screen("sleep")))
+        listOf(tooMany, badScreen).forEach { bad ->
+            try {
+                validateRule(bad, tools)
+                fail("accepted invalid multi-trigger/condition $bad")
+            } catch (_: RuleSpecException) {}
+        }
+    }
 }

@@ -21,6 +21,8 @@ object RuleTime {
 /** Tools whose arguments only the engine's policy checks (plugin-guard hardline): never direct rule steps. */
 val ENGINE_ONLY_STEP_TOOLS = setOf("adb_shell", "phone_sh")
 
+const val MAX_RULE_TRIGGERS = 8
+
 class RuleSpecException(val problems: List<String>) : Exception(problems.joinToString("; "))
 
 /**
@@ -30,6 +32,7 @@ class RuleSpecException(val problems: List<String>) : Exception(problems.joinToS
 fun validateRule(spec: RuleSpec, knownTools: Set<String>, now: Long = System.currentTimeMillis()): RuleSpec {
     val p = mutableListOf<String>()
     if (spec.name.isBlank()) p += "name must not be empty"
+    if (spec.allTriggers.size > MAX_RULE_TRIGGERS) p += "at most $MAX_RULE_TRIGGERS triggers per automation"
     fun time(field: String, v: String?): String? {
         if (v == null) return null
         val t = RuleTime.parse(v)
@@ -38,26 +41,35 @@ fun validateRule(spec: RuleSpec, knownTools: Set<String>, now: Long = System.cur
     }
     fun days(field: String, d: List<Int>) { if (d.any { it !in 1..7 }) p += "$field must be numbers 1..7 (Mon=1 … Sun=7), got $d" }
 
-    val trigger = when (val t = spec.trigger) {
+    fun validateTrigger(raw: Trigger, prefix: String): Trigger = when (raw) {
         is Trigger.Time -> {
-            val set = listOfNotNull(t.at, t.everyMinutes, t.onceAtEpochMs).size
-            if (set != 1) p += "time trigger needs exactly one of \"at\" (HH:mm), \"everyMinutes\" (>=15) or \"onceAtEpochMs\""
-            days("trigger.days", t.days)
-            if (t.everyMinutes != null && t.everyMinutes < 15) p += "everyMinutes must be at least 15 (Android limits background alarms), got ${t.everyMinutes}"
-            if (t.onceAtEpochMs != null && t.onceAtEpochMs <= now) p += "onceAtEpochMs is in the past"
-            if (t.days.isNotEmpty() && t.at == null) p += "\"days\" only applies together with \"at\""
-            t.copy(at = time("trigger.at", t.at))
+            val set = listOfNotNull(raw.at, raw.everyMinutes, raw.onceAtEpochMs).size
+            if (set != 1) p += "$prefix time trigger needs exactly one of \"at\" (HH:mm), \"everyMinutes\" (>=15) or \"onceAtEpochMs\""
+            days("$prefix.days", raw.days)
+            if (raw.everyMinutes != null && raw.everyMinutes < 15) p += "$prefix.everyMinutes must be at least 15 (Android limits background alarms), got ${raw.everyMinutes}"
+            if (raw.onceAtEpochMs != null && raw.onceAtEpochMs <= now) p += "$prefix.onceAtEpochMs is in the past"
+            if (raw.days.isNotEmpty() && raw.at == null) p += "$prefix \"days\" only applies together with \"at\""
+            raw.copy(at = time("$prefix.at", raw.at))
         }
-        is Trigger.Screen -> t.also { if (it.event !in setOf("on", "off", "unlock")) p += "screen.event must be \"on\", \"off\" or \"unlock\", got \"${it.event}\"" }
-        is Trigger.BatteryLow -> t.also { if (it.percent !in 1..99) p += "battery_low.percent must be 1..99, got ${it.percent}" }
-        is Trigger.Geofence -> t.also {
-            if (it.lat !in -90.0..90.0 || it.lng !in -180.0..180.0) p += "geofence lat/lng out of range"
-            if (it.radiusM !in 50f..100_000f) p += "geofence.radiusM must be 50..100000 metres (100+ recommended), got ${it.radiusM}"
+        is Trigger.Wifi -> raw.copy(ssid = raw.ssid?.trim()?.takeIf { it.isNotEmpty() })
+        is Trigger.Bluetooth -> raw.copy(deviceName = raw.deviceName?.trim()?.takeIf { it.isNotEmpty() })
+        is Trigger.Screen -> raw.also { if (it.event !in setOf("on", "off", "unlock")) p += "$prefix.event must be \"on\", \"off\" or \"unlock\", got \"${it.event}\"" }
+        is Trigger.BatteryLow -> raw.also { if (it.percent !in 1..99) p += "$prefix.percent must be 1..99, got ${it.percent}" }
+        is Trigger.Geofence -> raw.also {
+            if (it.lat !in -90.0..90.0 || it.lng !in -180.0..180.0) p += "$prefix lat/lng out of range"
+            if (it.radiusM !in 50f..100_000f) p += "$prefix.radiusM must be 50..100000 metres (100+ recommended), got ${it.radiusM}"
         }
-        is Trigger.AppOpened -> t.also { if (it.packageName.isBlank()) p += "app_opened.packageName must not be empty" }
-        is Trigger.Notification -> t.copy(packageName = t.packageName?.takeIf { it.isNotBlank() }, keyword = t.keyword?.takeIf { it.isNotBlank() })
-        else -> t
+        is Trigger.AppOpened -> raw.also { if (it.packageName.isBlank()) p += "$prefix.packageName must not be empty" }
+        is Trigger.Notification -> raw.copy(
+            packageName = raw.packageName?.trim()?.takeIf { it.isNotEmpty() },
+            keyword = raw.keyword?.trim()?.takeIf { it.isNotEmpty() },
+            excludeKeyword = raw.excludeKeyword?.trim()?.takeIf { it.isNotEmpty() },
+        )
+        else -> raw
     }
+
+    val trigger = validateTrigger(spec.trigger, "trigger")
+    val extraTriggers = spec.extraTriggers.mapIndexed { idx, t -> validateTrigger(t, "extraTriggers[$idx]") }
     val conditions = spec.conditions.map { c ->
         when (c) {
             is Condition.TimeRange -> c.copy(from = time("time_range.from", c.from) ?: c.from, to = time("time_range.to", c.to) ?: c.to)
@@ -66,7 +78,13 @@ fun validateRule(spec: RuleSpec, knownTools: Set<String>, now: Long = System.cur
                 if ((it.min != null && it.min !in 0..100) || (it.max != null && it.max !in 0..100)) p += "battery condition min/max must be 0..100"
                 if (it.min != null && it.max != null && it.min > it.max) p += "battery condition min must be <= max"
             }
-            is Condition.Charging -> c
+            is Condition.Wifi -> c.copy(ssid = c.ssid?.trim()?.takeIf { it.isNotEmpty() })
+            is Condition.Screen -> c.also {
+                if (it.state !in setOf("on", "off", "unlocked", "locked")) {
+                    p += "screen condition state must be \"on\", \"off\", \"unlocked\" or \"locked\", got \"${it.state}\""
+                }
+            }
+            is Condition.Charging, is Condition.Bluetooth -> c
         }
     }
     var allowed = spec.allowedTools.map { it.trim() }.filter { it.isNotEmpty() }
@@ -98,6 +116,7 @@ fun validateRule(spec: RuleSpec, knownTools: Set<String>, now: Long = System.cur
     if (p.isNotEmpty()) throw RuleSpecException(p)
     return spec.copy(
         trigger = trigger,
+        extraTriggers = extraTriggers,
         conditions = conditions,
         allowedTools = allowed.distinct(),
         modelProvider = normalizedProvider,

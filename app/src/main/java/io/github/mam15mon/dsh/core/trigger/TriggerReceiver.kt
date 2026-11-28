@@ -24,14 +24,21 @@ class TriggerReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val jobs = runCatching {
             when (intent.action) {
-                ACTION_TIME -> listOf(hub.onEvent(DeviceEvent.Time(intent.getLongExtra("ruleId", -1))))
-                ACTION_GEOFENCE -> listOf(hub.onEvent(DeviceEvent.Geofence(intent.getLongExtra("ruleId", -1),
-                    intent.getBooleanExtra(LocationManager.KEY_PROXIMITY_ENTERING, true))))
+                ACTION_TIME -> listOf(hub.onEvent(DeviceEvent.Time(intent.getLongExtra("ruleId", -1), intent.getIntExtra("triggerIndex", 0))))
+                ACTION_GEOFENCE -> listOf(hub.onEvent(DeviceEvent.Geofence(
+                    intent.getLongExtra("ruleId", -1),
+                    intent.getBooleanExtra(LocationManager.KEY_PROXIMITY_ENTERING, true),
+                    intent.getIntExtra("triggerIndex", 0),
+                )))
                 ACTION_GEOFENCE_GMS -> {
                     val ev = GeofencingEvent.fromIntent(intent)
                     if (ev == null || ev.hasError()) emptyList() else {
                         val entering = ev.geofenceTransition == Geofence.GEOFENCE_TRANSITION_ENTER
-                        ev.triggeringGeofences.orEmpty().mapNotNull { g -> g.requestId.toLongOrNull()?.let { hub.onEvent(DeviceEvent.Geofence(it, entering)) } }
+                        ev.triggeringGeofences.orEmpty().mapNotNull { g ->
+                            RuleMatcher.parseGeofenceRequestId(g.requestId)?.let { (id, idx) ->
+                                hub.onEvent(DeviceEvent.Geofence(id, entering, idx))
+                            }
+                        }
                     }
                 }
                 else -> emptyList()

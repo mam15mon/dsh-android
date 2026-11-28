@@ -9,7 +9,7 @@ import dagger.hilt.components.SingletonComponent
 /** Raw device events, as seen by receivers/services. */
 sealed interface DeviceEvent {
     data class Manual(val ruleId: Long) : DeviceEvent
-    data class Time(val ruleId: Long) : DeviceEvent
+    data class Time(val ruleId: Long, val triggerIndex: Int = 0) : DeviceEvent
     data class Wifi(val connected: Boolean, val ssid: String?) : DeviceEvent
     data class Bluetooth(val connected: Boolean, val deviceName: String?) : DeviceEvent
     data class Power(val connected: Boolean) : DeviceEvent
@@ -19,7 +19,7 @@ sealed interface DeviceEvent {
     data class Screen(val event: String) : DeviceEvent
     data class Notification(val packageName: String, val title: String, val text: String) : DeviceEvent
     data class AppOpened(val packageName: String) : DeviceEvent
-    data class Geofence(val ruleId: Long, val entering: Boolean) : DeviceEvent
+    data class Geofence(val ruleId: Long, val entering: Boolean, val triggerIndex: Int = 0) : DeviceEvent
 }
 
 @EntryPoint

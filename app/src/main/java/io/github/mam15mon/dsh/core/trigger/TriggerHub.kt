@@ -2,13 +2,23 @@ package io.github.mam15mon.dsh.core.trigger
 
 import android.Manifest
 import android.app.AlarmManager
+import android.app.KeyguardManager
 import android.app.PendingIntent
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.location.LocationManager
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.wifi.WifiInfo
+import android.net.wifi.WifiManager
 import android.os.BatteryManager
+import android.os.PowerManager
 import android.util.Log
 import com.google.android.gms.common.ConnectionResult
 import com.google.android.gms.common.GoogleApiAvailability
@@ -94,7 +104,7 @@ class TriggerHub @Inject constructor(
 
     suspend fun setEnabled(id: Long, enabled: Boolean) { rules.setEnabled(id, enabled); sync() }
     suspend fun delete(id: Long) {
-        runCatching { cancelAlarm(id); cancelGeofence(id) }
+        runCatching { cancelAlarms(id); cancelGeofences(id) }
         rules.deleteRuns(id)
         rules.delete(id)
         lastFired.remove(id)
@@ -149,37 +159,52 @@ class TriggerHub @Inject constructor(
 
     fun nextFireAt(e: RuleEntity, s: RuleSpec, nowMs: Long = System.currentTimeMillis()): Long? {
         if (!e.enabled) return null
-        val t = s.trigger as? Trigger.Time ?: return null
-        return RuleMatcher.nextFire(t, e.createdAt, e.lastFiredAt, nowMs)
+        return RuleMatcher.nextFire(s, e.createdAt, e.lastFiredAt, nowMs)
     }
 
     /**
      * What the rule needs but does not have right now (so it would silently never fire). Shown to the
      * model by rule_create/rule_update and usable by the UI.
      */
-    fun missingPrerequisites(spec: RuleSpec): List<String> = buildList {
+    fun missingPrerequisites(spec: RuleSpec): List<String> = linkedSetOf<String>().apply {
         fun granted(p: String) = context.checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED
-        when (val t = spec.trigger) {
-            is Trigger.Geofence -> {
-                if (!granted(Manifest.permission.ACCESS_FINE_LOCATION)) add("precise location permission")
-                if (!granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION)) add("location 'Allow all the time' (background location)")
+        for (t in spec.allTriggers) {
+            when (t) {
+                is Trigger.Geofence -> {
+                    if (!granted(Manifest.permission.ACCESS_FINE_LOCATION)) add("precise location permission")
+                    if (!granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION)) add("location 'Allow all the time' (background location)")
+                }
+                is Trigger.Bluetooth -> if (Build.VERSION.SDK_INT >= 31 && !granted(Manifest.permission.BLUETOOTH_CONNECT)) add("Nearby devices (Bluetooth) permission")
+                is Trigger.Wifi -> if (t.ssid != null && !(granted(Manifest.permission.ACCESS_FINE_LOCATION) && granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION)))
+                    add("location 'Allow all the time' (Android hides the Wi-Fi name otherwise)")
+                is Trigger.Notification -> if (context.packageName !in NotificationManagerCompat.getEnabledListenerPackages(context)) add("Notification access")
+                is Trigger.AppOpened -> if (DshAccessibilityService.instance == null) add("Accessibility service (DSH screen control)")
+                else -> {}
             }
-            is Trigger.Bluetooth -> if (Build.VERSION.SDK_INT >= 31 && !granted(Manifest.permission.BLUETOOTH_CONNECT)) add("Nearby devices (Bluetooth) permission")
-            is Trigger.Wifi -> if (t.ssid != null && !(granted(Manifest.permission.ACCESS_FINE_LOCATION) && granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION)))
-                add("location 'Allow all the time' (Android hides the Wi-Fi name otherwise)")
-            is Trigger.Notification -> if (context.packageName !in NotificationManagerCompat.getEnabledListenerPackages(context)) add("Notification access")
-            is Trigger.AppOpened -> if (DshAccessibilityService.instance == null) add("Accessibility service (DSH screen control)")
-            else -> {}
         }
-    }
+        for (c in spec.conditions) {
+            when (c) {
+                is Condition.Wifi -> if (c.ssid != null && !(granted(Manifest.permission.ACCESS_FINE_LOCATION) && granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION)))
+                    add("location 'Allow all the time' (Android hides the Wi-Fi name otherwise)")
+                is Condition.Bluetooth -> if (Build.VERSION.SDK_INT >= 31 && !granted(Manifest.permission.BLUETOOTH_CONNECT))
+                    add("Nearby devices (Bluetooth) permission")
+                else -> {}
+            }
+        }
+    }.toList()
 
     /** Non-blocking caveats (e.g. inexact alarms) to mention when a rule is created. */
-    fun caveats(spec: RuleSpec): List<String> = buildList {
-        if (spec.trigger is Trigger.Time && !context.getSystemService(AlarmManager::class.java).canExact())
+    fun caveats(spec: RuleSpec): List<String> = linkedSetOf<String>().apply {
+        if (spec.allTriggers.any { it is Trigger.Time } && !context.getSystemService(AlarmManager::class.java).canExact())
             add("exact alarms are not allowed for DSH, so this time rule may fire several minutes late (grant 'Alarms & reminders' to fix)")
-        if (spec.trigger is Trigger.Geofence && !playServicesGeofencing)
+        if (spec.allTriggers.any { it is Trigger.Geofence } && !playServicesGeofencing)
             add("no Google Play services: the geofence uses the platform location service and may fire minutes late")
-    }
+    }.toList()
+
+    private fun hasLiveTriggers(e: RuleEntity, s: RuleSpec, nowMs: Long): Boolean =
+        s.allTriggers.any { t ->
+            t !is Trigger.Time || t.onceAtEpochMs == null || RuleMatcher.nextFire(t, e.createdAt, e.lastFiredAt, nowMs) != null
+        }
 
     /** Re-registers OS hooks for all enabled rules. Call at boot and after any change. Never throws. */
     suspend fun sync() = syncLock.withLock {
@@ -188,8 +213,7 @@ class TriggerHub @Inject constructor(
         val expiredOneShots = mutableSetOf<Long>()
         cache = all.filter { it.enabled }.mapNotNull { e ->
             val spec = decode(e) ?: return@mapNotNull null
-            val t = spec.trigger
-            if (t is Trigger.Time && t.onceAtEpochMs != null && RuleMatcher.nextFire(t, e.createdAt, e.lastFiredAt, now) == null) {
+            if (!hasLiveTriggers(e, spec, now)) {
                 expiredOneShots += e.id
                 null
             } else {
@@ -197,12 +221,18 @@ class TriggerHub @Inject constructor(
             }
         }
         expiredOneShots.forEach { id -> runCatching { rules.setEnabled(id, false) } }
-        all.forEach { e -> runCatching { cancelAlarm(e.id) } }
+        all.forEach { e -> runCatching { cancelAlarms(e.id) } }
+        val fences = mutableListOf<Triple<Long, Int, Trigger.Geofence>>()
         cache.forEach { (e, s) ->
-            val t = s.trigger
-            if (t is Trigger.Time) runCatching { scheduleAlarm(e, t, now) }.onFailure { Log.w(TAG, "rule ${e.id}: cannot schedule", it) }
+            s.allTriggers.forEachIndexed { idx, t ->
+                when (t) {
+                    is Trigger.Time -> runCatching { scheduleAlarm(e, t, idx, now) }.onFailure { Log.w(TAG, "rule ${e.id}[$idx]: cannot schedule", it) }
+                    is Trigger.Geofence -> fences += Triple(e.id, idx, t)
+                    else -> {}
+                }
+            }
         }
-        runCatching { syncGeofences(all.map { it.id }, cache.mapNotNull { (e, s) -> (s.trigger as? Trigger.Geofence)?.let { e.id to it } }) }
+        runCatching { syncGeofences(all.map { it.id }, fences) }
             .onFailure { Log.w(TAG, "geofence sync failed", it) }
         val mask = RuleMatcher.monitorMask(cache.map { it.second })
         runCatching { RuleMonitorService.setRunning(context, mask) }
@@ -210,37 +240,105 @@ class TriggerHub @Inject constructor(
 
     /**
      * Matches [event] against the enabled rules. Time alarms are rescheduled first (and one-shot
-     * timers auto-disabled), then each matching rule fires in its own job, so a slow rule (waiting
-     * for an unlock) neither delays the next alarm nor blocks other rules. The returned job completes
-     * once dispatch is done (not the runs).
+     * timers auto-disabled when no live trigger remains), then each matching rule fires in its own job.
      */
     fun onEvent(event: DeviceEvent): Job = scope.launch {
         if (cache.isEmpty()) sync()
         var oneShotMatch: Pair<RuleEntity, RuleSpec>? = null
         if (event is DeviceEvent.Time) rules.get(event.ruleId)?.let { e ->
             val s = decode(e)
-            val t = s?.trigger as? Trigger.Time
+            val t = s?.allTriggers?.getOrNull(event.triggerIndex) as? Trigger.Time
             if (t != null && e.enabled) {
                 if (t.onceAtEpochMs != null) {
                     oneShotMatch = e to s
-                    runCatching { rules.setEnabled(e.id, false) }
-                    cache = cache.filterNot { it.first.id == e.id }
+                    val otherLive = s.allTriggers.withIndex().any { (idx, tr) ->
+                        idx != event.triggerIndex && (tr !is Trigger.Time || tr.onceAtEpochMs == null ||
+                            RuleMatcher.nextFire(tr, e.createdAt, e.lastFiredAt, System.currentTimeMillis()) != null)
+                    }
+                    if (!otherLive) {
+                        runCatching { rules.setEnabled(e.id, false) }
+                        cache = cache.filterNot { it.first.id == e.id }
+                    }
                 } else {
-                    runCatching { scheduleAlarm(e.copy(lastFiredAt = System.currentTimeMillis()), t) }
+                    runCatching { scheduleAlarm(e.copy(lastFiredAt = System.currentTimeMillis()), t, event.triggerIndex) }
                 }
             }
         }
         val candidates = (cache + listOfNotNull(oneShotMatch)).distinctBy { it.first.id }
-        val needBattery = candidates.any { (_, s) -> s.conditions.any { it is Condition.Battery || it is Condition.Charging } }
-        val batteryState = if (needBattery) battery() else (0 to false)
+        val allConds = candidates.flatMap { it.second.conditions }
+        val state = if (allConds.isEmpty()) DeviceState() else collectDeviceState(allConds)
         val nowTime = LocalTime.now()
         val nowDate = LocalDate.now()
-        candidates.filter { (e, s) ->
+        candidates.mapNotNull { (e, s) ->
             runCatching {
-                RuleMatcher.matches(e.id, s.trigger, event) &&
-                    s.conditions.all { RuleMatcher.holds(it, nowTime, nowDate, batteryState.first, batteryState.second) }
-            }.onFailure { Log.w(TAG, "rule ${e.id}: cannot evaluate", it) }.getOrDefault(false)
-        }.forEach { (e, s) -> scope.launch { fire(e, s, event) } }
+                val hit = RuleMatcher.matchRule(e.id, s, event) ?: return@mapNotNull null
+                if (s.conditions.all { RuleMatcher.holds(it, nowTime, nowDate, state) }) Triple(e, s, hit.value) else null
+            }.onFailure { Log.w(TAG, "rule ${e.id}: cannot evaluate", it) }.getOrNull()
+        }.forEach { (e, s, matchedTrigger) -> scope.launch { fire(e, s, event, matchedTrigger = matchedTrigger) } }
+    }
+
+    private fun collectDeviceState(conditions: List<Condition>): DeviceState {
+        val needBattery = conditions.any { it is Condition.Battery || it is Condition.Charging }
+        val (pct, charging) = if (needBattery) battery() else (0 to false)
+
+        val wifiConds = conditions.filterIsInstance<Condition.Wifi>()
+        val (wifiConn, wifiSsid) = if (wifiConds.isNotEmpty()) currentWifi(wifiConds.any { it.ssid != null }) else (false to null)
+
+        val needScreen = conditions.any { it is Condition.Screen }
+        val (interactive, locked) = if (needScreen) currentScreen() else (true to false)
+
+        val needBt = conditions.any { it is Condition.Bluetooth }
+        val btConn = if (needBt) currentBluetooth() else false
+
+        return DeviceState(
+            batteryPct = pct,
+            charging = charging,
+            wifiConnected = wifiConn,
+            wifiSsid = wifiSsid,
+            screenInteractive = interactive,
+            keyguardLocked = locked,
+            bluetoothConnected = btConn,
+        )
+    }
+
+    private fun currentWifi(needSsid: Boolean): Pair<Boolean, String?> = runCatching {
+        val cm = context.getSystemService(ConnectivityManager::class.java)
+        val caps = cm.activeNetwork?.let { cm.getNetworkCapabilities(it) }
+            ?.takeIf { it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) }
+        if (caps == null) return@runCatching false to null
+        if (!needSsid) return@runCatching true to null
+        @Suppress("DEPRECATION")
+        val info = if (Build.VERSION.SDK_INT >= 31) caps.transportInfo as? WifiInfo
+            else context.getSystemService(WifiManager::class.java).connectionInfo
+        val ssid = info?.ssid?.trim('"')?.takeIf { it != "<unknown ssid>" && it.isNotEmpty() }
+        true to ssid
+    }.getOrDefault(false to null)
+
+    private fun currentScreen(): Pair<Boolean, Boolean> {
+        val interactive = runCatching { context.getSystemService(PowerManager::class.java).isInteractive }.getOrDefault(true)
+        val locked = runCatching { context.getSystemService(KeyguardManager::class.java).isKeyguardLocked }.getOrDefault(false)
+        return interactive to locked
+    }
+
+    private fun currentBluetooth(): Boolean {
+        val audioConnected = runCatching {
+            val am = context.getSystemService(AudioManager::class.java)
+            am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any {
+                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP || it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+            }
+        }.getOrDefault(false)
+        if (audioConnected) return true
+        if (Build.VERSION.SDK_INT >= 31 && context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            return false
+        }
+        return runCatching {
+            val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter ?: return@runCatching false
+            @Suppress("MissingPermission")
+            val a2dp = adapter.getProfileConnectionState(BluetoothProfile.A2DP) == BluetoothProfile.STATE_CONNECTED
+            @Suppress("MissingPermission")
+            val hfp = adapter.getProfileConnectionState(BluetoothProfile.HEADSET) == BluetoothProfile.STATE_CONNECTED
+            a2dp || hfp
+        }.getOrDefault(false)
     }
 
     private fun battery(): Pair<Int, Boolean> {
@@ -249,7 +347,13 @@ class TriggerHub @Inject constructor(
         return pct to ((i?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0)
     }
 
-    private suspend fun fire(e: RuleEntity, s: RuleSpec, event: DeviceEvent, manual: Boolean = false): ManualRunResult {
+    private suspend fun fire(
+        e: RuleEntity,
+        s: RuleSpec,
+        event: DeviceEvent,
+        manual: Boolean = false,
+        matchedTrigger: Trigger? = null,
+    ): ManualRunResult {
         val now = System.currentTimeMillis()
         if (!manual) {
             val cooldownMs = s.cooldownSeconds.coerceIn(0, 86_400) * 1000L
@@ -291,7 +395,7 @@ class TriggerHub @Inject constructor(
                 // Insert "started" row before prompt() so SessionStore updates always find a matching row.
                 rules.insertRun(RuleRunEntity(ruleId = e.id, firedAt = now, sessionId = sessionId, outcome = "started"))
                 return try {
-                    sessions.get().prompt(sessionId, "[Automation \"${s.name}\" triggered by ${describe(s, event)}]\n${a.prompt}", ruleId = e.id)
+                    sessions.get().prompt(sessionId, "[Automation \"${s.name}\" triggered by ${describe(s, event, matchedTrigger)}]\n${a.prompt}", ruleId = e.id)
                     ManualRunResult(true, sessionId, "started")
                 } catch (ex: CancellationException) {
                     throw ex
@@ -305,25 +409,44 @@ class TriggerHub @Inject constructor(
         }
     }
 
-    private suspend fun describe(s: RuleSpec, e: DeviceEvent): String {
-        val readable = e is DeviceEvent.Notification &&
-            ((s.trigger as? Trigger.Notification)?.packageName != null || e.packageName !in settings.current().notificationBlocked)
-        return RuleMatcher.describeEvent(s, e, readable)
+    private suspend fun describe(s: RuleSpec, e: DeviceEvent, matchedTrigger: Trigger?): String {
+        val readable = if (e is DeviceEvent.Notification) {
+            val matchedHasPkg = (matchedTrigger as? Trigger.Notification)?.packageName != null ||
+                s.allTriggers.filterIsInstance<Trigger.Notification>().any { it.packageName == e.packageName }
+            matchedHasPkg || e.packageName !in settings.current().notificationBlocked
+        } else false
+        return RuleMatcher.describeEvent(s, e, readable, matchedTrigger)
     }
 
     // ---- time --------------------------------------------------------------------------------
 
-    private fun alarmIntent(id: Long) = PendingIntent.getBroadcast(context, id.toInt(),
-        Intent(context, TriggerReceiver::class.java).setAction(TriggerReceiver.ACTION_TIME).putExtra("ruleId", id),
-        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+    private fun alarmIntent(id: Long, triggerIndex: Int) = PendingIntent.getBroadcast(
+        context,
+        RuleMatcher.alarmRequestCode(id, triggerIndex),
+        Intent(context, TriggerReceiver::class.java)
+            .setAction(TriggerReceiver.ACTION_TIME)
+            .putExtra("ruleId", id)
+            .putExtra("triggerIndex", triggerIndex),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
 
-    private fun cancelAlarm(id: Long) = context.getSystemService(AlarmManager::class.java).cancel(alarmIntent(id))
+    private fun cancelAlarms(id: Long) {
+        val am = context.getSystemService(AlarmManager::class.java)
+        for (idx in 0 until MAX_RULE_TRIGGERS) am.cancel(alarmIntent(id, idx))
+        val legacy = PendingIntent.getBroadcast(
+            context, id.toInt(),
+            Intent(context, TriggerReceiver::class.java).setAction(TriggerReceiver.ACTION_TIME).putExtra("ruleId", id),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_NO_CREATE,
+        )
+        if (legacy != null) am.cancel(legacy)
+    }
 
-    private fun scheduleAlarm(e: RuleEntity, t: Trigger.Time, nowMs: Long = System.currentTimeMillis()) {
+    private fun scheduleAlarm(e: RuleEntity, t: Trigger.Time, triggerIndex: Int, nowMs: Long = System.currentTimeMillis()) {
         val next = RuleMatcher.nextFire(t, e.createdAt, e.lastFiredAt, nowMs) ?: return
         val am = context.getSystemService(AlarmManager::class.java)
-        if (am.canExact()) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, next, alarmIntent(e.id))
-        else am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, next, alarmIntent(e.id))
+        val pi = alarmIntent(e.id, triggerIndex)
+        if (am.canExact()) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, next, pi)
+        else am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, next, pi)
     }
 
     // ---- geofence ------------------------------------------------------------------------------
@@ -338,11 +461,17 @@ class TriggerHub @Inject constructor(
         runCatching { GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context) == ConnectionResult.SUCCESS }.getOrDefault(false)
     }
 
-    private fun geofenceIntent(id: Long) = PendingIntent.getBroadcast(context, (id + 500_000).toInt(),
-        Intent(context, TriggerReceiver::class.java).setAction(TriggerReceiver.ACTION_GEOFENCE).putExtra("ruleId", id),
-        PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+    private fun geofenceIntent(id: Long, triggerIndex: Int) = PendingIntent.getBroadcast(
+        context,
+        500_000 + RuleMatcher.alarmRequestCode(id, triggerIndex),
+        Intent(context, TriggerReceiver::class.java)
+            .setAction(TriggerReceiver.ACTION_GEOFENCE)
+            .putExtra("ruleId", id)
+            .putExtra("triggerIndex", triggerIndex),
+        PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
 
-    /** One shared PendingIntent for all Play-services geofences (request id = rule id). */
+    /** One shared PendingIntent for all Play-services geofences (request id = ruleId:triggerIndex). */
     private val gmsGeofenceIntent by lazy {
         PendingIntent.getBroadcast(context, 499_999, Intent(context, TriggerReceiver::class.java).setAction(TriggerReceiver.ACTION_GEOFENCE_GMS),
             PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
@@ -351,7 +480,7 @@ class TriggerHub @Inject constructor(
     /**
      * Re-registers geofences sequentially inside [syncLock] so removal and registration cannot race.
      */
-    private suspend fun syncGeofences(allIds: List<Long>, fences: List<Pair<Long, Trigger.Geofence>>) {
+    private suspend fun syncGeofences(allIds: List<Long>, fences: List<Triple<Long, Int, Trigger.Geofence>>) {
         val canLocate = context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         if (playServicesGeofencing) {
             val client = LocationServices.getGeofencingClient(context)
@@ -362,8 +491,8 @@ class TriggerHub @Inject constructor(
             }
             if (!canLocate || fences.isEmpty()) return
             val request = GeofencingRequest.Builder().setInitialTrigger(0).apply {
-                fences.forEach { (id, g) ->
-                    addGeofence(Geofence.Builder().setRequestId(id.toString()).setCircularRegion(g.lat, g.lng, g.radiusM)
+                fences.forEach { (id, idx, g) ->
+                    addGeofence(Geofence.Builder().setRequestId(RuleMatcher.geofenceRequestId(id, idx)).setCircularRegion(g.lat, g.lng, g.radiusM)
                         .setExpirationDuration(Geofence.NEVER_EXPIRE)
                         .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER or Geofence.GEOFENCE_TRANSITION_EXIT).build())
                 }
@@ -382,15 +511,29 @@ class TriggerHub @Inject constructor(
             return
         }
         val lm = context.getSystemService(LocationManager::class.java)
-        allIds.forEach { id -> runCatching { lm.removeProximityAlert(geofenceIntent(id)) } }
+        allIds.forEach { id -> cancelPlatformGeofences(lm, id) }
         if (!canLocate) return
         @Suppress("MissingPermission")
-        fences.forEach { (id, g) -> runCatching { lm.addProximityAlert(g.lat, g.lng, g.radiusM, -1, geofenceIntent(id)) } }
+        fences.forEach { (id, idx, g) -> runCatching { lm.addProximityAlert(g.lat, g.lng, g.radiusM, -1, geofenceIntent(id, idx)) } }
     }
 
-    private fun cancelGeofence(id: Long) = runCatching {
-        if (playServicesGeofencing) LocationServices.getGeofencingClient(context).removeGeofences(listOf(id.toString()))
-        else context.getSystemService(LocationManager::class.java).removeProximityAlert(geofenceIntent(id))
+    private fun cancelPlatformGeofences(lm: LocationManager, id: Long) {
+        for (idx in 0 until MAX_RULE_TRIGGERS) runCatching { lm.removeProximityAlert(geofenceIntent(id, idx)) }
+        val legacy = PendingIntent.getBroadcast(
+            context, (id + 500_000).toInt(),
+            Intent(context, TriggerReceiver::class.java).setAction(TriggerReceiver.ACTION_GEOFENCE).putExtra("ruleId", id),
+            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_NO_CREATE,
+        )
+        if (legacy != null) runCatching { lm.removeProximityAlert(legacy) }
+    }
+
+    private fun cancelGeofences(id: Long) = runCatching {
+        if (playServicesGeofencing) {
+            val reqIds = (0 until MAX_RULE_TRIGGERS).map { RuleMatcher.geofenceRequestId(id, it) } + id.toString()
+            LocationServices.getGeofencingClient(context).removeGeofences(reqIds)
+        } else {
+            cancelPlatformGeofences(context.getSystemService(LocationManager::class.java), id)
+        }
     }
 
     private companion object {

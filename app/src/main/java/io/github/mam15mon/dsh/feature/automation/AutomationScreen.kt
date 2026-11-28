@@ -248,7 +248,7 @@ fun AutomationScreen(
     }.filter { r ->
         query.isBlank() ||
             (r.spec?.name ?: "").contains(query, true) ||
-            (r.spec?.let { describeTrigger(it.trigger, zh) } ?: "").contains(query, true)
+            (r.spec?.allTriggers?.any { describeTrigger(it, zh).contains(query, true) } == true)
     }
 
     Column(Modifier.fillMaxSize().background(c.bgBase).statusBarsPadding().imePadding()) {
@@ -386,7 +386,7 @@ private fun RuleCard(
 ) {
     val c = Dsh.colors
     val context = LocalContext.current
-    val isManual = r.spec?.trigger is Trigger.Manual
+    val allManual = r.spec?.allTriggers?.all { it is Trigger.Manual } == true
     Row(
         Modifier.fillMaxWidth().clip(Radius.lg).background(c.bgLayer1).border(Hairline, c.borderL2, Radius.lg).pressable(onClick, Radius.lg)
             .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 12.dp),
@@ -400,11 +400,15 @@ private fun RuleCard(
             Text(
                 r.spec?.name ?: "#${r.entity.id}",
                 style = DshType.s14m,
-                color = if (r.entity.enabled || isManual) c.labelPrimary else c.labelTertiary,
+                color = if (r.entity.enabled || allManual) c.labelPrimary else c.labelTertiary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            r.spec?.let { Text(describeTrigger(it.trigger, zh), style = DshType.xs13, color = c.labelTertiary, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            r.spec?.let {
+                val base = describeTrigger(it.trigger, zh)
+                val summary = if (it.extraTriggers.isEmpty()) base else "$base · +${it.extraTriggers.size}"
+                Text(summary, style = DshType.xs13, color = c.labelTertiary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 r.spec?.let {
                     Tag(
@@ -427,7 +431,7 @@ private fun RuleCard(
             }
             Text(subline, style = DshType.xxs12, color = c.labelCaption, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        if (isManual) {
+        if (allManual) {
             IconBtn(
                 res = R.drawable.dsw_play_outline,
                 onClick = onRunManual,
@@ -475,7 +479,7 @@ fun RuleDetailScreen(
     val r = row
     Column(Modifier.fillMaxSize().background(c.bgBase).statusBarsPadding()) {
         DTopBar(r?.spec?.name ?: stringResource(R.string.automation), onBack) {
-            if (r != null && r.spec?.trigger !is Trigger.Manual) {
+            if (r != null && r.spec?.allTriggers?.all { it is Trigger.Manual } != true) {
                 DSwitch(r.entity.enabled, { on -> vm.toggle(r.entity.id, on) })
                 Spacer(Modifier.width(8.dp))
             }
@@ -553,10 +557,16 @@ fun RuleDetailScreen(
             SettingsGroupTitle(stringResource(R.string.rule_when))
             SettingsCard {
                 Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    KeyValue(stringResource(R.string.rule_trigger), s?.let { describeTrigger(it.trigger, zh) } ?: "—")
+                    when {
+                        s == null -> KeyValue(stringResource(R.string.rule_trigger), "—")
+                        s.allTriggers.size == 1 -> KeyValue(stringResource(R.string.rule_trigger), describeTrigger(s.trigger, zh))
+                        else -> s.allTriggers.forEachIndexed { idx, t ->
+                            KeyValue(stringResource(R.string.rule_trigger_any_idx, idx + 1), describeTrigger(t, zh))
+                        }
+                    }
                     s?.conditions?.forEach { KeyValue(stringResource(R.string.rule_condition), describeCondition(it, zh)) }
                     nextAt?.let { KeyValue(stringResource(R.string.rule_next_trigger), Fmt.dateTime(it)) }
-                    if (s != null && s.trigger !is Trigger.Manual) {
+                    if (s != null && s.allTriggers.any { it !is Trigger.Manual }) {
                         KeyValue(stringResource(R.string.rule_cooldown), stringResource(R.string.rule_cooldown_seconds, s.cooldownSeconds))
                     }
                     if (s != null) {
@@ -654,6 +664,7 @@ private fun QuickEditRuleDialog(id: Long, spec: RuleSpec, vm: AutomationViewMode
     val rootProjects = remember(id, rootEnabled) { if (rootEnabled) vm.rootProjects() else emptyList() }
 
     var name by remember(id) { mutableStateOf(spec.name) }
+    val allManual = spec.allTriggers.all { it is Trigger.Manual }
     val timeTrigger = spec.trigger as? Trigger.Time
     val notifTrigger = spec.trigger as? Trigger.Notification
     var atText by remember(id) { mutableStateOf(timeTrigger?.at.orEmpty()) }
@@ -676,7 +687,7 @@ private fun QuickEditRuleDialog(id: Long, spec: RuleSpec, vm: AutomationViewMode
             DButton(
                 text = stringResource(R.string.save),
                 onClick = {
-                    val cooldown = if (spec.trigger is Trigger.Manual) spec.cooldownSeconds else cooldownText.trim().toIntOrNull()
+                    val cooldown = if (allManual) spec.cooldownSeconds else cooldownText.trim().toIntOrNull()
                     if (cooldown == null) {
                         error = "Invalid cooldown"
                         return@DButton
@@ -747,7 +758,7 @@ private fun QuickEditRuleDialog(id: Long, spec: RuleSpec, vm: AutomationViewMode
                 Text(stringResource(R.string.rule_prompt_label), style = DshType.xs13m, color = c.labelSecondary)
                 DInput(prompt, { prompt = it }, singleLine = false, minHeight = 88.dp)
             }
-            if (spec.trigger !is Trigger.Manual) {
+            if (!allManual) {
                 Text(stringResource(R.string.rule_cooldown_label), style = DshType.xs13m, color = c.labelSecondary)
                 DInput(cooldownText, { cooldownText = it }, keyboardType = KeyboardType.Number, minHeight = 36.dp)
             }
@@ -844,7 +855,11 @@ fun describeTrigger(t: Trigger, zh: Boolean): String = when (t) {
     is Trigger.BatteryLow -> (if (zh) "电量降到 " else "Battery at ") + "${t.percent}%"
     is Trigger.Headset -> if (t.plugged) (if (zh) "插入耳机" else "Headset plugged") else (if (zh) "拔出耳机" else "Headset unplugged")
     is Trigger.Screen -> when (t.event) { "on" -> if (zh) "屏幕点亮" else "Screen on"; "off" -> if (zh) "屏幕关闭" else "Screen off"; else -> if (zh) "解锁手机" else "Phone unlocked" }
-    is Trigger.Notification -> (if (zh) "收到通知 " else "Notification ") + listOfNotNull(t.packageName, t.keyword).joinToString(" · ")
+    is Trigger.Notification -> (if (zh) "收到通知 " else "Notification ") + listOfNotNull(
+        t.packageName,
+        t.keyword,
+        t.excludeKeyword?.let { if (zh) "排除 $it" else "except $it" },
+    ).joinToString(" · ")
     is Trigger.AppOpened -> (if (zh) "打开 " else "Opened ") + t.packageName
     is Trigger.Geofence -> (if (t.enter) (if (zh) "到达" else "Arrive") else (if (zh) "离开" else "Leave")) + " ${"%.4f".format(t.lat)},${"%.4f".format(t.lng)}"
 }
@@ -854,6 +869,14 @@ fun describeCondition(c: Condition, zh: Boolean): String = when (c) {
     is Condition.Days -> (if (zh) "星期" else "Days ") + c.days.joinToString(if (zh) "、" else ", ") { weekday(it, zh) }
     is Condition.Battery -> (if (zh) "电量 " else "Battery ") + listOfNotNull(c.min?.let { "≥$it%" }, c.max?.let { "≤$it%" }).joinToString(" ")
     is Condition.Charging -> if (c.charging) (if (zh) "充电中" else "Charging") else (if (zh) "未充电" else "Not charging")
+    is Condition.Wifi -> (if (c.connected) (if (zh) "已连 Wi‑Fi" else "On Wi‑Fi") else (if (zh) "未连 Wi‑Fi" else "Not on Wi‑Fi")) + (c.ssid?.let { " $it" } ?: "")
+    is Condition.Screen -> when (c.state) {
+        "on" -> if (zh) "亮屏中" else "Screen on"
+        "off" -> if (zh) "息屏中" else "Screen off"
+        "unlocked" -> if (zh) "已解锁" else "Unlocked"
+        else -> if (zh) "未解锁" else "Locked"
+    }
+    is Condition.Bluetooth -> if (c.connected) (if (zh) "蓝牙已连接" else "Bluetooth connected") else (if (zh) "蓝牙未连接" else "Bluetooth disconnected")
 }
 
 /** 1 = Monday … 7 = Sunday (ISO), as 一…日 / Mon…Sun. */

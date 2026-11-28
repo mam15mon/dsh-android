@@ -100,14 +100,14 @@ class RuleTools @Inject constructor(
     private companion object {
         val RULE_DOC = """
 Create an automation. The app requests tool approval before saving.
-RuleSpec: {"name": str, "trigger": T, "conditions": [C...], "action": A, "allowedTools": [tools], "cooldownSeconds": 60, "notifyOnSuccess": true}
+RuleSpec: {"name": str, "trigger": T, "extraTriggers": [T... opt OR triggers, max 8 total], "conditions": [C... AND], "action": A, "allowedTools": [tools], "cooldownSeconds": 60, "notifyOnSuccess": true}
 T (pick one, field "type"):
- {"type":"manual"} (run on demand) | {"type":"time","at":"HH:mm","days":[1..7 Mon=1, empty=daily]} | {"type":"time","everyMinutes":n>=15} | {"type":"time","onceAtEpochMs":ms}
+ {"type":"manual"} | {"type":"time","at":"HH:mm","days":[1..7 Mon=1, empty=daily]} | {"type":"time","everyMinutes":n>=15} | {"type":"time","onceAtEpochMs":ms}
  {"type":"wifi","connected":bool,"ssid":opt} | {"type":"bluetooth","connected":bool,"deviceName":opt}
  {"type":"power","connected":bool} | {"type":"battery_low","percent":n} | {"type":"headset","plugged":bool}
- {"type":"screen","event":"on|off|unlock"} | {"type":"notification","packageName":opt,"keyword":opt} (named pkg shares text; empty uses allowlist)
+ {"type":"screen","event":"on|off|unlock"} | {"type":"notification","packageName":opt,"keyword":opt,"excludeKeyword":opt}
  {"type":"app_opened","packageName":str} | {"type":"geofence","lat":d,"lng":d,"radiusM":200,"enter":bool}
-C: {"type":"time_range","from":"HH:mm","to":"HH:mm"} | {"type":"days","days":[..]} | {"type":"battery","min":n,"max":n} | {"type":"charging","charging":bool}
+C: {"type":"time_range","from":"HH:mm","to":"HH:mm"} | {"type":"days","days":[..]} | {"type":"battery","min":n,"max":n} | {"type":"charging","charging":bool} | {"type":"wifi","connected":bool,"ssid":opt} | {"type":"screen","state":"on|off|unlocked|locked"} | {"type":"bluetooth","connected":bool}
 A: {"type":"steps","steps":[{"tool":"sound_mode","args":{"mode":"silent"}}]} (fixed calls, preferred)
  | {"type":"agent","prompt":"task"} (unattended; allowedTools only, no user questions)
 Screen tools wait for unlock; list all needed tools (e.g. app_guide). Returns missing permissions.""".trim()

@@ -423,6 +423,7 @@
     <string name="rule_when">触发条件</string>
     <string name="rule_then">执行内容</string>
     <string name="rule_trigger">触发</string>
+    <string name="rule_trigger_any_idx">触发 %1$d（任一）</string>
     <string name="rule_condition">条件</string>
     <string name="rule_created">创建时间</string>
     <string name="rule_last_trigger">上次触发</string>

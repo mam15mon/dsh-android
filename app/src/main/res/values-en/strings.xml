@@ -423,6 +423,7 @@
     <string name="rule_when">When</string>
     <string name="rule_then">Then</string>
     <string name="rule_trigger">Trigger</string>
+    <string name="rule_trigger_any_idx">Trigger %1$d (any)</string>
     <string name="rule_condition">Condition</string>
     <string name="rule_created">Created</string>
     <string name="rule_last_trigger">Last triggered</string>

@@ -420,6 +420,7 @@
     <string name="rule_when">Условие запуска</string>
     <string name="rule_then">Что делать</string>
     <string name="rule_trigger">Триггер</string>
+    <string name="rule_trigger_any_idx">Триггер %1$d (любой)</string>
     <string name="rule_condition">Условие</string>
     <string name="rule_created">Создана</string>
     <string name="rule_last_trigger">Последний запуск</string>

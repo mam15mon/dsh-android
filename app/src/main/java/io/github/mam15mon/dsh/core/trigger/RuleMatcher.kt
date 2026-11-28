@@ -9,9 +9,20 @@ import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
 
+/** Snapshot of current device state used when evaluating [Condition]s. */
+data class DeviceState(
+    val batteryPct: Int = 0,
+    val charging: Boolean = false,
+    val wifiConnected: Boolean = false,
+    val wifiSsid: String? = null,
+    val screenInteractive: Boolean = true,
+    val keyguardLocked: Boolean = false,
+    val bluetoothConnected: Boolean = false,
+)
+
 /**
  * Pure rule matching, condition evaluation, scheduling, event formatting, and monitor-mask helpers
- * shared by [TriggerHub], [RuleMonitorService], and unit tests.
+ * shared by [TriggerHub], [TriggerReceiver], [RuleMonitorService], and unit tests.
  */
 object RuleMatcher {
     const val FLAG_POWER = 1 shl 0
@@ -21,26 +32,43 @@ object RuleMatcher {
     const val FLAG_BLUETOOTH = 1 shl 4
     const val FLAG_WIFI = 1 shl 5
 
+    fun alarmRequestCode(ruleId: Long, triggerIndex: Int): Int =
+        ((ruleId.toInt() and 0xFFFF) shl 4) or (triggerIndex and 0xF)
+
+    fun geofenceRequestId(ruleId: Long, triggerIndex: Int): String = "$ruleId:$triggerIndex"
+
+    fun parseGeofenceRequestId(raw: String): Pair<Long, Int>? {
+        val parts = raw.split(':')
+        val id = parts.firstOrNull()?.toLongOrNull() ?: return null
+        val index = parts.getOrNull(1)?.toIntOrNull() ?: 0
+        return id to index
+    }
+
     fun monitorMask(specs: Iterable<RuleSpec>): Int {
         var mask = 0
         for (spec in specs) {
-            mask = mask or when (spec.trigger) {
-                is Trigger.Power -> FLAG_POWER
-                is Trigger.BatteryLow -> FLAG_BATTERY
-                is Trigger.Headset -> FLAG_HEADSET
-                is Trigger.Screen -> FLAG_SCREEN
-                is Trigger.Bluetooth -> FLAG_BLUETOOTH
-                is Trigger.Wifi -> FLAG_WIFI
-                is Trigger.Time, is Trigger.Geofence, is Trigger.Notification, is Trigger.AppOpened, is Trigger.Manual -> 0
+            for (trigger in spec.allTriggers) {
+                mask = mask or when (trigger) {
+                    is Trigger.Power -> FLAG_POWER
+                    is Trigger.BatteryLow -> FLAG_BATTERY
+                    is Trigger.Headset -> FLAG_HEADSET
+                    is Trigger.Screen -> FLAG_SCREEN
+                    is Trigger.Bluetooth -> FLAG_BLUETOOTH
+                    is Trigger.Wifi -> FLAG_WIFI
+                    is Trigger.Time, is Trigger.Geofence, is Trigger.Notification, is Trigger.AppOpened, is Trigger.Manual -> 0
+                }
             }
         }
         return mask
     }
 
-    fun matches(id: Long, t: Trigger, ev: DeviceEvent): Boolean = when (t) {
+    fun matchRule(id: Long, spec: RuleSpec, ev: DeviceEvent): IndexedValue<Trigger>? =
+        spec.allTriggers.withIndex().firstOrNull { (idx, t) -> matches(id, t, ev, idx) }
+
+    fun matches(id: Long, t: Trigger, ev: DeviceEvent, triggerIndex: Int = 0): Boolean = when (t) {
         is Trigger.Manual -> ev is DeviceEvent.Manual && ev.ruleId == id
-        is Trigger.Time -> ev is DeviceEvent.Time && ev.ruleId == id
-        is Trigger.Geofence -> ev is DeviceEvent.Geofence && ev.ruleId == id && ev.entering == t.enter
+        is Trigger.Time -> ev is DeviceEvent.Time && ev.ruleId == id && ev.triggerIndex == triggerIndex
+        is Trigger.Geofence -> ev is DeviceEvent.Geofence && ev.ruleId == id && ev.triggerIndex == triggerIndex && ev.entering == t.enter
         is Trigger.Wifi -> ev is DeviceEvent.Wifi && ev.connected == t.connected && (t.ssid == null || t.ssid.equals(ev.ssid, true))
         is Trigger.Bluetooth -> ev is DeviceEvent.Bluetooth && ev.connected == t.connected &&
             (t.deviceName == null || ev.deviceName?.contains(t.deviceName, true) == true)
@@ -49,13 +77,17 @@ object RuleMatcher {
         is Trigger.BatteryLow -> ev is DeviceEvent.Battery && !ev.charging && ev.previous != null && ev.previous > t.percent && ev.percent <= t.percent
         is Trigger.Headset -> ev is DeviceEvent.Headset && ev.plugged == t.plugged
         is Trigger.Screen -> ev is DeviceEvent.Screen && ev.event == t.event
-        is Trigger.Notification -> ev is DeviceEvent.Notification && (t.packageName == null || t.packageName == ev.packageName) &&
-            (t.keyword == null || "${ev.title} ${ev.text}".contains(t.keyword, true))
+        is Trigger.Notification -> if (ev !is DeviceEvent.Notification) false else {
+            val haystack = "${ev.title} ${ev.text}"
+            (t.packageName == null || t.packageName == ev.packageName) &&
+                (t.keyword == null || haystack.contains(t.keyword, true)) &&
+                (t.excludeKeyword == null || !haystack.contains(t.excludeKeyword, true))
+        }
         is Trigger.AppOpened -> ev is DeviceEvent.AppOpened && ev.packageName == t.packageName
     }
 
     /** Unparseable stored values (rules from before validation) make the condition false, never a crash. */
-    fun holds(c: Condition, nowTime: LocalTime, nowDate: LocalDate, batteryPct: Int, charging: Boolean): Boolean = when (c) {
+    fun holds(c: Condition, nowTime: LocalTime, nowDate: LocalDate, state: DeviceState): Boolean = when (c) {
         is Condition.TimeRange -> {
             val from = RuleTime.parse(c.from)
             val to = RuleTime.parse(c.to)
@@ -64,9 +96,32 @@ object RuleMatcher {
             else nowTime >= from || nowTime <= to
         }
         is Condition.Days -> nowDate.dayOfWeek.value in c.days
-        is Condition.Battery -> (c.min == null || batteryPct >= c.min) && (c.max == null || batteryPct <= c.max)
-        is Condition.Charging -> charging == c.charging
+        is Condition.Battery -> (c.min == null || state.batteryPct >= c.min) && (c.max == null || state.batteryPct <= c.max)
+        is Condition.Charging -> state.charging == c.charging
+        is Condition.Wifi -> when {
+            c.ssid == null -> state.wifiConnected == c.connected
+            c.connected -> state.wifiConnected && c.ssid.equals(state.wifiSsid, true)
+            else -> !state.wifiConnected || (state.wifiSsid != null && !c.ssid.equals(state.wifiSsid, true))
+        }
+        is Condition.Screen -> when (c.state) {
+            "on" -> state.screenInteractive
+            "off" -> !state.screenInteractive
+            "unlocked" -> state.screenInteractive && !state.keyguardLocked
+            "locked" -> !state.screenInteractive || state.keyguardLocked
+            else -> false
+        }
+        is Condition.Bluetooth -> state.bluetoothConnected == c.connected
     }
+
+    fun nextFire(
+        spec: RuleSpec,
+        createdAt: Long,
+        lastFiredAt: Long?,
+        nowMs: Long,
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): Long? = spec.allTriggers.filterIsInstance<Trigger.Time>()
+        .mapNotNull { nextFire(it, createdAt, lastFiredAt, nowMs, zone) }
+        .minOrNull()
 
     fun nextFire(
         t: Trigger.Time,
@@ -96,9 +151,14 @@ object RuleMatcher {
         return null
     }
 
-    fun describeEvent(s: RuleSpec, e: DeviceEvent, readableNotification: Boolean): String = when (e) {
+    fun describeEvent(
+        s: RuleSpec,
+        e: DeviceEvent,
+        readableNotification: Boolean,
+        matchedTrigger: Trigger? = null,
+    ): String = when (e) {
         is DeviceEvent.Manual -> "manual run"
-        is DeviceEvent.Time -> (s.trigger as? Trigger.Time)?.let { t ->
+        is DeviceEvent.Time -> ((matchedTrigger ?: s.trigger) as? Trigger.Time)?.let { t ->
             t.at?.let { "scheduled time ($it)" }
                 ?: t.everyMinutes?.let { "periodic schedule (every $it min)" }
                 ?: "one-time schedule"
