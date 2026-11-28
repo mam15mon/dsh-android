@@ -1,11 +1,9 @@
 package io.github.mam15mon.dsh.nativeextra
 
 import android.content.Context
-import android.os.SystemClock
 import java.io.File
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -63,50 +61,4 @@ object NativeRoot {
         c.getSharedPreferences("native_root", 0).edit().putString("workspace", path.trimEnd('/').ifEmpty { "/" }).commit()
     }
     fun clearDirectory(c: Context) { c.getSharedPreferences("native_root", 0).edit().remove("workspace").commit() }
-    fun target(c: Context) = File(c.filesDir.canonicalFile, "phone-workspace")
-    private var helper: Process? = null
-    private var mountedSource: String? = null
-
-    /** Owned by the engine process; closing its pipe also releases the FUSE mount. */
-    @Synchronized fun restore(c: Context) {
-        val source = selected(c)
-        if (source.isEmpty()) return
-        check(enabled(c)) { "所选直连目录需要 Root；请开启 Root 或解除目录直连" }
-        if (helper?.isAlive == true && mountedSource == source) return
-        disconnect()
-        val dir = target(c).apply { mkdirs() }
-        check(dir.canonicalFile == dir.absoluteFile) { "挂载点不能是链接" }
-        check(dir.list()?.isEmpty() == true) { "挂载点不是空目录" }
-        val pid = android.os.Process.myPid()
-        val uid = android.os.Process.myUid()
-        // Android/data's emulated view is replaced by the underlying path for Root/FUSE access.
-        val host = if (source.startsWith("/sdcard/Android/data/")) "/data/media/${uid / 100000}/Android/data/" + source.removePrefix("/sdcard/Android/data/") else source
-        val executable = File(c.applicationInfo.nativeLibraryDir, "libdshworkspace.so")
-        val process = ProcessBuilder("su", "--mount-master", "-c", "exec ${quote(executable.path)} $pid $uid ${quote(host)} ${quote(dir.path)}")
-            .redirectErrorStream(true).start()
-        val output = process.inputStream.bufferedReader()
-        val deadline = SystemClock.elapsedRealtime() + 10_000
-        val messages = StringBuilder()
-        try {
-            while (SystemClock.elapsedRealtime() < deadline) {
-                if (output.ready() || !process.isAlive) {
-                    val line = output.readLine() ?: break
-                    if (line == "READY") { helper = process; mountedSource = source; return }
-                    messages.appendLine(line)
-                } else Thread.sleep(25)
-            }
-            error("目录直连失败：${messages.toString().take(1000)}")
-        } finally {
-            if (helper !== process) { process.outputStream.close(); process.destroy() }
-        }
-    }
-
-    @Synchronized fun disconnect() {
-        helper?.let { process ->
-            process.outputStream.close()
-            if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly()
-        }
-        helper = null
-        mountedSource = null
-    }
 }

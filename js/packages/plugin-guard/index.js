@@ -45,7 +45,7 @@ const SHELL_TOOLS = new Map([
  * the same hardline floor applies, judged from the directory they run in ("/", like `adb shell`)
  * and with an unknown HOME treated as "/". They keep the device tool's risk-based approval.
  */
-const DEVICE_SHELL_TOOLS = new Map([['adb_shell', 'command']])
+const DEVICE_SHELL_TOOLS = new Map([['adb_shell', 'command'], ['phone_sh', 'cmd']])
 const DEVICE_SHELL_CWD = '/'
 /** Built-in file tools whose `file_path` may be auto-allowed inside the app's own directories. */
 const FILE_WRITE_TOOLS = new Set(['write', 'edit'])
@@ -211,7 +211,7 @@ ${wheel}${notes}
 }
 
 /** The English system-prompt section (the model replies in the user's language). */
-export function systemPromptSection(locale, descriptors = [], { homeWrites = false, shell = true, deviceTools = true } = {}) {
+export function systemPromptSection(locale, descriptors = [], { homeWrites = false, shell = true, deviceTools = true, root = process.env.DSH_ENGINE_IDENTITY === 'root' } = {}) {
   const lang = locale ? `The phone's language is ${locale}. Reply in the language the user writes in; when unsure, use ${locale}.` : 'Reply in the language the user writes in.'
   const examples = lockFreeExamples(descriptors)
   if (descriptors.some(d => d.name.startsWith('file_') && d.needsUnlock !== true)) examples.push('file_*')
@@ -233,9 +233,9 @@ Approvals and safety:
 - Read-only tools and read-only shell commands run directly${homeWrites ? ', and so do file writes inside your private home and temp folders (except in 仅可查看 mode)' : ''}. Other actions that change the phone ask the user, depending on the permission mode the user picked for this conversation; a read of private data (messages, contacts, notifications, clipboard, …) asks once per conversation.
 - If the user rejects a call, do not retry it — ask what they want instead. If a call is refused because the conversation is in 仅可查看 (read-only) mode, tell the user and ask them to switch the permission mode if they want the change made.
 - Before deleting, moving or overwriting files, state exactly which files and folders are affected (list them, or give the count and paths) and confirm the scope with the user unless they already named the exact items. Prefer the narrowest scope; never act on whole storage roots.
-- The app checks shell commands, including bash and adb_shell, against the user's enabled command rules. A match returns HARDLINE_BLOCKED before the command runs. Tell the user which rule matched and never try to work around the block.
+- The app checks shell commands, including bash, adb_shell and phone_sh, against the user's enabled command rules. A match returns HARDLINE_BLOCKED before the command runs. Tell the user which rule matched and never try to work around the block.
 
-${screenSection(descriptors)}${shell ? "Shell: the bash tool runs Android's /system/bin/sh (mksh) with toybox utilities, not GNU bash/coreutils; there is no root. " : ''}The user's shared storage is /sdcard (= /storage/emulated/0). Your working directory is the app's private home folder.
+${screenSection(descriptors)}${shell ? (root ? "Shell: the bash tool runs Android's /system/bin/sh (mksh) with toybox utilities as root (uid 0), not GNU bash/coreutils. " : "Shell: the bash tool runs Android's /system/bin/sh (mksh) with toybox utilities, not GNU bash/coreutils; there is no root. ") : ''}The user's shared storage is /sdcard (= /storage/emulated/0). Your working directory is the app's private home folder.
 
 Long tasks (working through a list, many screens): keep calling tools until the task is done. A reply without a tool call ends the task — there is no automatic next round, so never say you will continue later or automatically. Track progress with todo_write (which items are done) so a resumed task does not repeat actions that already took effect; if you must stop, say why, what is done, what remains and how to continue.
 

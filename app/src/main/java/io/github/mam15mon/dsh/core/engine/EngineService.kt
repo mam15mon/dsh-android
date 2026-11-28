@@ -25,7 +25,7 @@ import io.github.mam15mon.dsh.engine.NodeRuntime
  * 引擎常驻, see [EngineKeepAlive]).
  */
 class EngineService : Service() {
-    @Volatile private var started = false
+    private val started = java.util.concurrent.atomic.AtomicBoolean(false)
     private val rootEngine by lazy { io.github.mam15mon.dsh.nativeextra.RootEngineConnection(this) {
         stopSelf(); Process.killProcess(Process.myPid())
     } }
@@ -63,16 +63,15 @@ class EngineService : Service() {
     }
 
     private val binder = object : IEngineService.Stub() {
-        override fun isRunning() = started
+        override fun isRunning() = started.get()
         override fun stop() {
             EngineDiagnostics.markCleanExit(this@EngineService, Process.myPid())
             try { if (rootStarted) rootEngine.stop() }
             finally { stopSelf(); Process.killProcess(Process.myPid()) }
         }
 
-        override fun start(env: Bundle): Bundle = synchronized(this) {
-            check(!started) { "engine already started in this process" }
-            started = true
+        override fun start(env: Bundle): Bundle {
+            check(started.compareAndSet(false, true)) { "engine already started in this process" }
             val engineDir = EngineInstaller.install(this@EngineService)
             if (env.getString("DSH_ENGINE_IDENTITY") == "root") {
                 check(kotlinx.coroutines.runBlocking { io.github.mam15mon.dsh.nativeextra.RootGrant.check(this@EngineService) }) { "Root authorization was revoked before engine start" }
@@ -87,7 +86,7 @@ class EngineService : Service() {
                 env.putBinder("engine_owner", this)
                 env.putStringArrayList("engine_managed", arrayListOf(File(filesDir, "dsh-home").path, File(filesDir, "home").path, File(cacheDir, "tmp").path, File(cacheDir, "node-compile-cache").path))
                 rootStarted = true
-                return@synchronized kotlinx.coroutines.runBlocking { rootEngine.connect().start(env) }
+                return kotlinx.coroutines.runBlocking { rootEngine.connect().start(env) }
             }
             val stdin = ParcelFileDescriptor.createPipe()   // [read, write]
             val stdout = ParcelFileDescriptor.createPipe()
@@ -119,7 +118,7 @@ class EngineService : Service() {
                 stopSelf()
                 Process.killProcess(Process.myPid())
             }, "node-main", 16L * 1024 * 1024).start()
-            Bundle().apply {
+            return Bundle().apply {
                 putParcelable("sdk_in", stdin[1])
                 putParcelable("sdk_out", stdout[0])
                 putParcelable("bridge", ParcelFileDescriptor.dup(appSide).also { Os.close(appSide) })

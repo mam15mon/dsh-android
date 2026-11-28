@@ -25,7 +25,7 @@ class RootTools @Inject constructor(@ApplicationContext private val context: Con
     }
     override val tools = listOf(
         object : Tool("phone_sh", ToolGroup.System, Risk.dangerous, false,
-            "Run a command on this phone as root through su. Requires the user's Root switch. No app allowlist. Use for Android processes, dumpsys and privileged operations; regular bash runs as the app user. Output is bounded. Do not run interactive commands.", {
+            "Run a command on this phone as root through su. Requires the user's Root switch. Subject to DSH's enabled command rules. Use for Android processes, dumpsys and privileged operations. Output is bounded. Do not run interactive commands.", {
                 string("cmd", "Command; omit to check root identity")
                 int("timeout_s", "1-120 seconds, default 30")
             }) {

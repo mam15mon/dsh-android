@@ -131,7 +131,7 @@ fun SignInDialog(account: AccountRepository, onUseApiKey: () -> Unit) {
         DButton(stringResource(if (active) R.string.cancel else R.string.acct_add_api_key),
             { if (active) dismiss() else { account.showLogin(false); onUseApiKey() } }, variant = BtnVariant.Outline, enabled = !committing)
         when {
-            waiting && phase == SignInPhase.WaitingBrowser && a?.authorizeUrl != null ->
+            waiting && phase == SignInPhase.WaitingBrowser && a.authorizeUrl != null ->
                 DButton(stringResource(R.string.acct_open), { account.openSignInPage() })
             waiting -> Box(Modifier.heightIn(min = 36.dp).clip(Radius.md).background(c.brandPrimary).padding(horizontal = 20.dp), contentAlignment = Alignment.Center) {
                 Spinner(14.dp, c.labelOnPrimary)

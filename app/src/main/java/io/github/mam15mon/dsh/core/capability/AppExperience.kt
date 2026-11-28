@@ -94,7 +94,7 @@ class RouteTracker {
         turns[sessionId.substringBefore('/')] = Turn().also { it.prompt = prompt }
     }
 
-    fun observe(sessionId: String, tool: String, args: JsonObject, ok: Boolean, text: String, outcome: ActionOutcome?, errorCode: String?) = synchronized(turns) {
+    fun observe(sessionId: String, tool: String, args: JsonObject, ok: Boolean, text: String, outcome: ActionOutcome?, errorCode: String?): Unit = synchronized(turns) {
         val t = turn(sessionId)
         if (errorCode == "loop_guard" || text.contains(LOOP_STOP)) { t.failed = true; t.steps = null; return }
         if (errorCode == "user_took_over") { t.steps = null; return }

@@ -88,8 +88,8 @@ kotlin { jvmToolchain(21) }
 room { schemaDirectory("$projectDir/schemas") }
 
 dependencies {
-    implementation("com.github.topjohnwu.libsu:service:6.0.0")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation(libs.libsu.service)
+    implementation(libs.okhttp)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.core.splashscreen)
     // 用浏览器登录 (#49): the sign-in flow in a Custom Tab when Google refuses the in-app WebView.

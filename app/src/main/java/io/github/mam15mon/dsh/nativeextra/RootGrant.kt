@@ -21,7 +21,9 @@ object RootGrant {
     }
     /** New su authorization on each check; a cached Root Binder cannot prove a grant still exists. */
     suspend fun check(context: Context): Boolean = withContext(Dispatchers.IO) {
-        if (context.getSharedPreferences("native_root", 0).getBoolean("disabled_by_user", false)) {
+        val prefs = context.getSharedPreferences("native_root", 0)
+        val allowed = if (prefs.contains("disabled_by_user")) !prefs.getBoolean("disabled_by_user", true) else prefs.getBoolean("enabled", false)
+        if (!allowed) {
             NativeRoot.setEnabled(context, false)
             return@withContext false
         }

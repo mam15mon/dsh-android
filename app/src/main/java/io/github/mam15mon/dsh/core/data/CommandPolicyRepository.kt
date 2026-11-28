@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.core.CorruptionException
 import androidx.datastore.core.DataStoreFactory
 import androidx.datastore.core.Serializer
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -59,7 +60,10 @@ data class CommandPolicy(
 /** The app owns the saved rules and serves the current policy over the capability channel. */
 @Singleton
 class CommandPolicyRepository @Inject constructor(@ApplicationContext context: Context) {
-    private val store = DataStoreFactory.create(PolicySerializer) { file(context) }
+    private val store = DataStoreFactory.create(
+        serializer = PolicySerializer,
+        corruptionHandler = ReplaceFileCorruptionHandler { CommandPolicy() },
+    ) { file(context) }
     val policy = store.data
 
     suspend fun setBuiltIn(rule: BuiltInCommandRule, enabled: Boolean) = store.updateData { current ->
@@ -89,7 +93,7 @@ class CommandPolicyRepository @Inject constructor(@ApplicationContext context: C
     }
 
     private object PolicySerializer : Serializer<CommandPolicy> {
-        private val json = Json { encodeDefaults = true }
+        private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
         override val defaultValue = CommandPolicy()
 
         override suspend fun readFrom(input: InputStream): CommandPolicy = try {

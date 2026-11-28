@@ -141,7 +141,10 @@ class DshAccessibilityService : AccessibilityService() {
             val r = Rect().also(n::getBoundsInScreen)
             val flags = buildList {
                 if (n.isClickable) add("click"); if (n.isLongClickable) add("long"); if (n.isEditable) add("edit")
-                if (n.isScrollable) add("scroll"); if (n.isCheckable) add(if (n.isChecked) "checked" else "unchecked")
+                if (n.isScrollable) add("scroll"); if (n.isCheckable) {
+                    val checked = if (Build.VERSION.SDK_INT >= 36) n.checked == AccessibilityNodeInfo.CHECKED_STATE_TRUE else @Suppress("DEPRECATION") n.isChecked
+                    add(if (checked) "checked" else "unchecked")
+                }
                 if (!n.isEnabled) add("disabled"); if (n.isFocused) add("focused")
                 if (isWheel(n)) add("wheel")
             }

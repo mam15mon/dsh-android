@@ -47,4 +47,27 @@ class CommandPolicyRepositoryTest {
         repo.delete(rule.id)
         assertEquals(CommandPolicy(disabledBuiltIns = setOf("power")), repo.policy.first())
     }
+
+    @Test fun recoversFromCorruptPolicyAndIgnoresUnknownFields() = runBlocking {
+        val context = object : ContextWrapper(ApplicationProvider.getApplicationContext()) {
+            override fun getFilesDir() = temp.root
+        }
+        val file = temp.root.resolve("command-policy.json")
+        file.writeText("{not-valid-json")
+
+        val recovered = CommandPolicyRepository(context)
+        assertEquals(CommandPolicy(), recovered.policy.first())
+        recovered.setBuiltIn(BuiltInCommandRule.Power, false)
+        assertEquals(setOf("power"), recovered.policy.first().disabledBuiltIns)
+
+        val unknownDir = temp.newFolder("unknown")
+        val unknownContext = object : ContextWrapper(ApplicationProvider.getApplicationContext()) {
+            override fun getFilesDir() = unknownDir
+        }
+        unknownDir.resolve("command-policy.json").writeText(
+            """{"disabledBuiltIns":["wipe"],"customRules":[],"futureFlag":true}""",
+        )
+        val forward = CommandPolicyRepository(unknownContext)
+        assertEquals(setOf("wipe"), forward.policy.first().disabledBuiltIns)
+    }
 }

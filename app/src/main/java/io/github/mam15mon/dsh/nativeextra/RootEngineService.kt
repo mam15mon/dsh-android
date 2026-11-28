@@ -49,7 +49,7 @@ class RootEngineService : RootService() {
             ownership = EngineStateOwnership(appUid, privateTemp).also { watcher -> managed.forEach { path ->
                 File(path).mkdirs(); watcher.watch(File(path))
             } }
-            Os.setgid(appUid)
+            @Suppress("DEPRECATION") Os.setgid(appUid)
             Os.umask(7)
             env.keySet().filter { !it.startsWith("engine_") }.forEach { key -> env.getString(key)?.let { Os.setenv(key, it, true) } }
             System.setProperty("dsh.native.dir", env.getString("DSH_NATIVE_DIR")!!)

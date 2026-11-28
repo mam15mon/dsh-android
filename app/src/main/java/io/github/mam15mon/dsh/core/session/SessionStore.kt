@@ -573,7 +573,7 @@ class SessionStore @Inject constructor(
         val payload = mode.payload(io.github.mam15mon.dsh.core.model.modeDisplayName(context, mode))
         val ruleId = ruleIdOfSession(sessionId)
         if (ruleId != null) {
-            val spec = rules.get(ruleId)?.let { RpcJson.decodeFromString(RuleSpec.serializer(), it.specJson) }
+            val spec = rules.get(ruleId)?.let { runCatching { RpcJson.decodeFromString(RuleSpec.serializer(), it.specJson) }.getOrNull() }
             // Install the exact tool scope before prompting, including for resumed runs and subagents.
             sdk.request("android/session/mode", buildJsonObject {
                 put("sessionId", sessionId)
@@ -746,7 +746,7 @@ class SessionStore @Inject constructor(
         val ruleId = ruleIdOfSession(sessionId)
         if (ruleId != null) {
             // Unattended: never prompt; allow only what the rule's owner approved.
-            val spec = rules.get(ruleId)?.let { RpcJson.decodeFromString(RuleSpec.serializer(), it.specJson) }
+            val spec = rules.get(ruleId)?.let { runCatching { RpcJson.decodeFromString(RuleSpec.serializer(), it.specJson) }.getOrNull() }
             return if (spec != null && tool in spec.allowedTools) "allowed-once" else "rejected"
         }
         val live = flowOf(sessionId).value

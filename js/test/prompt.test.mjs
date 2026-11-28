@@ -52,3 +52,13 @@ test('long tasks: no "next round" claims, progress kept with todo_write (#37)', 
   for (const s of ['keep calling tools until the task is done', 'there is no automatic next round', 'todo_write', 'does not repeat actions', 'what remains'])
     assert.ok(text.includes(s), s)
 })
+
+test('root identity prompt omits "there is no root" and states uid 0', () => {
+  const appText = systemPromptSection('zh-CN', [screen])
+  assert.ok(appText.includes('there is no root'))
+  assert.ok(appText.includes('including bash, adb_shell and phone_sh'))
+
+  const rootText = systemPromptSection('zh-CN', [screen], { root: true })
+  assert.ok(rootText.includes('as root (uid 0)'))
+  assert.ok(!rootText.includes('there is no root'))
+})

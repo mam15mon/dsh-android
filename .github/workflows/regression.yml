@@ -29,18 +29,23 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - uses: gradle/actions/setup-gradle@v4
       - uses: android-actions/setup-android@v3
         with:
           packages: platform-tools
       - name: Install Android SDK
         run: sdkmanager 'platforms;android-37.2' 'build-tools;36.0.0'
-      - name: Test Android client
+      - name: Test JS engine units
         run: |
-          ./gradlew :app:testDebugUnitTest \
-            --tests '*ProvidersTest' --tests '*CodexModelsTest' --tests '*BallGeometryTest' \
-            --tests '*VoiceMachineTest' --tests '*Update*Test' --tests '*ApkCheckTest' \
-            --tests '*LockStateTest' --console=plain
+          node --test js/test/hardline.test.mjs js/test/mode.test.mjs js/test/prompt.test.mjs \
+            js/test/guard-ask.test.mjs js/test/continuation.test.mjs js/test/experience.test.mjs \
+            js/test/workbuddy.test.mjs js/test/workbuddy-compat.test.mjs \
+            js/test/extensions-unit.test.mjs js/test/links.test.mjs
+      - name: Test Android client
+        run: ./gradlew :app:testDebugUnitTest --console=plain
       - name: Build debug APK
         if: github.event_name == 'pull_request'
         run: ./gradlew :app:assembleDebug --console=plain

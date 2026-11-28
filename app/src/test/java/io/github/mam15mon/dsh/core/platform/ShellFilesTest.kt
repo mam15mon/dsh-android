@@ -11,7 +11,7 @@ import java.nio.file.Files
 
 class ShellFilesTest {
     private val root: File = Files.createTempDirectory("shellfiles").toFile().canonicalFile
-    private val fs = ShellFiles(allowed = { it == root.path || it.startsWith(root.path + "/") })
+    private val fs = ShellFiles(allowed = { it == root.path || it.startsWith(root.path + File.separator) })
     private fun f(rel: String) = File(root, rel)
     private fun write(rel: String, text: String) = f(rel).apply { parentFile.mkdirs(); writeText(text) }
 

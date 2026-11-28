@@ -121,3 +121,36 @@ test('live guard and preview use the saved policy and reread it before dispatch'
   const updatedWhileWaiting = await pre(exec(power), next)
   assert.equal(updatedWhileWaiting.info?.code, 'HARDLINE_BLOCKED')
 })
+
+test('phone_sh (root shell) gets the same hardline floor and custom rules as adb_shell', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'guard-phone-sh-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const rule = { id: 'custom-git', enabled: true, spec: { name: 'Force push', command: 'git', argumentPrefix: ['push'], anyArguments: ['--force'] } }
+  const savedPolicy = { customRules: [rule] }
+  const agent = { id: 'a1', session: { id: 's1', header: {} } }
+  const guards = []
+  const { ctx, listeners } = fakeContext({
+    agents: { list: () => [agent] },
+    androidBridge: { request: async method => {
+      assert.equal(method, 'command-policy/get')
+      return savedPolicy
+    } },
+  })
+  ctx.tools.guard = fn => { guards.push(fn); return () => {} }
+  apply(ctx, { ledgerPath: join(dir, 'budget.json') })
+  const pre = listeners.get('tools/pre-execute')[0]
+  const ask = async () => ({ kind: 'ask', reason: 'device tool' })
+  const exec = cmd => ({ name: 'phone_sh', arguments: { cmd }, agent, callId: 'c' })
+
+  for (const blocked of ['reboot', 'rm -rf /sdcard', 'git push --force']) {
+    const call = exec(blocked)
+    const d = await pre(call, ask)
+    assert.equal(d.kind, 'deny', blocked)
+    assert.equal(d.info?.code, 'HARDLINE_BLOCKED', blocked)
+    if (blocked !== 'git push --force') assert.match(guards[0](call) ?? '', /HARDLINE_BLOCKED/, blocked)
+  }
+
+  const ok = exec('dumpsys battery')
+  assert.notEqual((await pre(ok, ask)).kind, 'deny')
+  assert.equal(guards[0](ok), undefined)
+})

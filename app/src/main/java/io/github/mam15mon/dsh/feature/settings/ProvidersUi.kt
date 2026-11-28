@@ -331,7 +331,7 @@ private fun ProviderEditor(vm: SettingsViewModel, existing: ProviderConfig?, pre
         // endpoint and ids, and cannot verify a different address, key or newly checked model.
         val stillChecked = offered.filter { it in selected }
         val plan = planTest(outcome, stillChecked, verified.toList().takeIf { verifiedFor == endpoint }.orEmpty(),
-            makeMain = existing == null || s.choice.provider?.id == current?.id)
+            makeMain = existing == null || s.choice.provider?.id == current.id)
         if (endpointKey(api, baseUrl, key) == endpoint) {
             verified.clear(); verified.addAll(plan.verified); verifiedFor = endpoint
             pendingMain = plan.main

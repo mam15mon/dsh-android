@@ -70,12 +70,12 @@ internal class ShellFiles(
         val src = file(from)
         if (!src.exists()) return@op "failed ${src.path}: not found"
         val named = file(to)
-        val into = to.endsWith("/") || named.isDirectory
+        val into = to.endsWith("/") || to.endsWith(File.separator) || named.isDirectory
         val dst = if (into) File(named, src.name) else named
         if (!allowed(dst.path)) throw IllegalArgumentException("not in shared storage: ${dst.path}")
         val caseOnly = dst.path != src.path && dst.path.equals(src.path, ignoreCase = true)
         if (dst.path == src.path) return@op "skip ${src.path}: same path"
-        if (dst.path.startsWith(src.path + "/")) return@op "failed ${src.path}: cannot move a folder into itself"
+        if (dst.path.startsWith(src.path + File.separator)) return@op "failed ${src.path}: cannot move a folder into itself"
         if (dst.exists() && !caseOnly) return@op "skip ${src.path}: ${dst.path} exists"
         if (into) named.mkdirs()
         dst.parentFile?.mkdirs()
@@ -117,7 +117,7 @@ internal class ShellFiles(
         for (f in root.walkTopDown()) {
             if (clock() > deadline) { note = "search stopped after ${timeoutMs / 1000}s; results are partial — narrow 'dir' or 'name'"; break }
             if (!f.isFile) continue
-            if (name != null && !name.matches(if (byPath) f.relativeTo(root).path else f.name)) continue
+            if (name != null && !name.matches(if (byPath) f.relativeTo(root).invariantSeparatorsPath else f.name)) continue
             if (text != null && !contains(f, text)) continue
             hits += f
             if (hits.size >= MAX_HITS) { note = "stopped at $MAX_HITS matches"; break }

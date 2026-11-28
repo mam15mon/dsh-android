@@ -236,7 +236,7 @@ fun Lightbox(file: File, onDismiss: () -> Unit) {
     Dialog(onDismiss, DialogProperties(usePlatformDefaultWidth = false)) {
         var scale by remember { mutableFloatStateOf(1f) }
         var offset by remember { mutableStateOf(Offset.Zero) }
-        val state = rememberTransformableState { z, p, _ -> scale = (scale * z).coerceIn(1f, 6f); offset += p }
+        val state = rememberTransformableState { _, z, p, _ -> scale = (scale * z).coerceIn(1f, 6f); offset += p }
         Box(Modifier.fillMaxSize().background(Color(0xE0000000)).clickable { onDismiss() }, contentAlignment = Alignment.Center) {
             AsyncImage(file, null, Modifier.fillMaxSize().transformable(state)
                 .graphicsLayer { scaleX = scale; scaleY = scale; translationX = offset.x; translationY = offset.y }, contentScale = ContentScale.Fit)

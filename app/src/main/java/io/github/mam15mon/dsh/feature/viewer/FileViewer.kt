@@ -365,7 +365,7 @@ private fun ZoomableImage(bitmap: ImageBitmap, description: String) {
     val c = Dsh.colors
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
-    val zoom = rememberTransformableState { z, p, _ -> scale = (scale * z).coerceIn(1f, 8f); offset = if (scale == 1f) Offset.Zero else offset + p }
+    val zoom = rememberTransformableState { _, z, p, _ -> scale = (scale * z).coerceIn(1f, 8f); offset = if (scale == 1f) Offset.Zero else offset + p }
     Box(Modifier.fillMaxSize().background(c.bgLayer1)
         .pointerInput(Unit) { detectTapGestures(onDoubleTap = { if (scale > 1f) { scale = 1f; offset = Offset.Zero } else scale = 2.5f }) }
         .transformable(zoom), contentAlignment = Alignment.Center) {

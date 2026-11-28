@@ -19,7 +19,7 @@ object RuleTime {
 }
 
 /** Tools whose arguments only the engine's policy checks (plugin-guard hardline): never direct rule steps. */
-val ENGINE_ONLY_STEP_TOOLS = setOf("adb_shell")
+val ENGINE_ONLY_STEP_TOOLS = setOf("adb_shell", "phone_sh")
 
 class RuleSpecException(val problems: List<String>) : Exception(problems.joinToString("; "))
 

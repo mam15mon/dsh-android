@@ -3,12 +3,14 @@ package io.github.mam15mon.dsh.core.extensions
 import io.github.mam15mon.dsh.core.extensions.FakeExtEngine.Companion.list
 import io.github.mam15mon.dsh.core.extensions.FakeExtEngine.Companion.plugin
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -67,10 +69,10 @@ class ExtensionsStoreTest {
         afterRestart = list(plugin("a", extra = ""","tools":["web_search_bing"],"skills":["guide"]"""))
         val s = store()
         s.refresh()
-        val event = async { s.events.first() }
+        val event = async(start = CoroutineStart.UNDISPATCHED) { s.events.first() }
         val view = s.change("a") { setEnabled("a", true) }
         assertTrue(view.restartRequired)
-        val activated = (event.await() as ExtEvent.Activated).results.single()
+        val activated = (withTimeout(3_000) { event.await() } as ExtEvent.Activated).results.single()
         assertEquals(Activation("a", "T-a", ok = true, tools = listOf("web_search_bing"), skills = listOf("guide")), activated)
         assertEquals(1, restarts.get())
         eventually { s.restart.value == RestartState.Idle }
@@ -133,10 +135,9 @@ class ExtensionsStoreTest {
         assertTrue(s.progress.value.isEmpty())
         s.onNotification(ExtMethods.N_CHANGED, JsonObject(emptyMap()))
         eventually { s.list.value != null }
-        val e = async { s.events.first() }
-        yield()
+        val e = async(start = CoroutineStart.UNDISPATCHED) { s.events.first() }
         s.onNotification(ExtMethods.N_NOTICE, buildJsonObject { put("kind", "suspended"); put("name", "a"); put("message", "a 让引擎崩溃了，已暂停它。") })
-        assertEquals("suspended", (e.await() as ExtEvent.Notice).notice.kind)
+        assertEquals("suspended", (withTimeout(3_000) { e.await() } as ExtEvent.Notice).notice.kind)
     }
 
     @Test fun `the engine's activation notice right after our own restart is not repeated`() = runBlocking {
