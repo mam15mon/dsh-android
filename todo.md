@@ -39,6 +39,12 @@
   - 确认 `MarketIndex.CURATED_URL` 与 `js/packages/plugin-extensions/boot.js` 继续复用上游 `jackwener/DSH-Android` 精选插件市场索引。
   - 删除无生产调用方的废弃 FUSE 挂载产物 `app/src/main/jniLibs/arm64-v8a/libdshworkspace.so`、`tools/root-workspace.c`，并清理 `PhoneBackendTest` 中的 `mountOnly` 测试及文档过时引用。
 
+- [x] **打磨设置与 Root 页 UI 顺序**
+  - 「手机权限」页（`SettingsScreen.PhoneSection`）：将 `BackgroundScreenCard` 提至 `PhoneAccessCard` 之下，并过滤掉与顶部重复的 `accessibility` 系统权限行。
+  - 设置一级菜单（`SettingsIndex`）：将 10 行大卡按账号与模型 / 助手配置 / 权限与安全 / 用量与系统拆分为 4 张逻辑卡片。
+  - 「命令规则」页（`CommandRulesSection`）：将命令规则测试框 `RulePreview` 移到 14 条内置规则之前。
+  - 「Root 与项目」页（`NativeRootActivity`）：在已开启 Root 授权时将「工作项目」区块提至「Root 操作」状态卡之前。
+
 ## 待办 / 需确认项
 
 - [ ] **R8 混淆与资源裁剪真机验证**（`app/build.gradle.kts` 当前保持 `isMinifyEnabled = false` / `isShrinkResources = false`；开启前需在真机上完整验证 JNI、Shizuku、RootService 反射与序列化流程）。

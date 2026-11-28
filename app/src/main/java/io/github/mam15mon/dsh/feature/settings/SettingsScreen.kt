@@ -179,18 +179,26 @@ fun ModeScreen(route: ModeRoute, onBack: () -> Unit, onReplace: (String) -> Unit
 @Composable
 private fun SettingsIndex(extUpdates: Int, onOpen: (SettingsSection) -> Unit) {
     val c = Dsh.colors
-    Spacer(Modifier.height(8.dp))
-    SettingsCard {
-        SettingsSection.entries.forEachIndexed { i, s ->
-            SettingsRow(stringResource(s.label), divider = i > 0, onClick = { onOpen(s) },
-                leading = { DIcon(s.icon, size = 18.dp, tint = c.labelSecondary) },
-                trailing = {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        // 扩展: "N 个可更新" (updates are never automatic, §7.3).
-                        if (s == SettingsSection.Extensions && extUpdates > 0) Tag(stringResource(R.string.ext_updates_badge, extUpdates), Tone.Info)
-                        DIcon(R.drawable.dsw_chevron_right_outline, size = 14.dp, tint = c.labelTertiary)
-                    }
-                })
+    val groups = listOf(
+        listOf(SettingsSection.Account, SettingsSection.Model),
+        listOf(SettingsSection.Modes, SettingsSection.Agent, SettingsSection.Extensions, SettingsSection.General),
+        listOf(SettingsSection.Phone, SettingsSection.CommandRules),
+        listOf(SettingsSection.Usage, SettingsSection.About),
+    )
+    groups.forEachIndexed { groupIdx, sections ->
+        Spacer(Modifier.height(if (groupIdx == 0) 8.dp else 12.dp))
+        SettingsCard {
+            sections.forEachIndexed { i, s ->
+                SettingsRow(stringResource(s.label), divider = i > 0, onClick = { onOpen(s) },
+                    leading = { DIcon(s.icon, size = 18.dp, tint = c.labelSecondary) },
+                    trailing = {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            // 扩展: "N 个可更新" (updates are never automatic, §7.3).
+                            if (s == SettingsSection.Extensions && extUpdates > 0) Tag(stringResource(R.string.ext_updates_badge, extUpdates), Tone.Info)
+                            DIcon(R.drawable.dsw_chevron_right_outline, size = 14.dp, tint = c.labelTertiary)
+                        }
+                    })
+            }
         }
     }
 }
@@ -436,9 +444,11 @@ private fun PhoneSection(vm: SettingsViewModel, onNotificationApps: () -> Unit) 
     }
     SettingsGroupTitle("手机操作方式")
     io.github.mam15mon.dsh.nativeextra.PhoneAccessCard()
+    val s by vm.settings.collectAsStateWithLifecycle()
+    io.github.mam15mon.dsh.nativeextra.BackgroundScreenCard(s.agentScreen, vm::setAgentScreen, vm.agentScreenDegraded)
     Text(stringResource(R.string.set_phone_desc), Modifier.padding(start = 4.dp, top = 12.dp, bottom = 8.dp), style = DshType.xs13, color = c.labelTertiary)
     SettingsCard {
-        PermissionCatalog.all.forEachIndexed { i, p ->
+        PermissionCatalog.all.filterNot { it.id == "accessibility" }.forEachIndexed { i, p ->
             val granted = remember(tick) { p.check(context) }
             SettingsRow(p.title(zh), p.why(zh), divider = i > 0,
                 leading = { StateDot(if (granted) DotKind.Done else DotKind.Idle) },
@@ -462,10 +472,6 @@ private fun PhoneSection(vm: SettingsViewModel, onNotificationApps: () -> Unit) 
         SettingsRow(stringResource(R.string.keep_alive), keepAliveHint(kind, zh), onClick = { KeepAliveLauncher.open(context, kind) },
             trailing = { DIcon(R.drawable.dsw_chevron_right_outline, size = 14.dp, tint = c.labelTertiary) })
     }
-
-
-    val s by vm.settings.collectAsStateWithLifecycle()
-    io.github.mam15mon.dsh.nativeextra.BackgroundScreenCard(s.agentScreen, vm::setAgentScreen, vm.agentScreenDegraded)
 }
 
 @Composable

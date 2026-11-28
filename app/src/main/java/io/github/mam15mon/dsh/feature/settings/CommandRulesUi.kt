@@ -134,6 +134,7 @@ fun CommandRulesSection(vm: CommandRulesViewModel, openEditor: (id: String?, bas
                 trailing = { DSwitch(rule.enabled, { vm.setCustom(rule.id, it) }) })
         }
     }
+    RulePreview(vm, policy)
     RuleMessage(stringResource(R.string.command_rules_built_in_hint))
     for ((group, rules) in builtInGroups) {
         SettingsGroupTitle(stringResource(group))
@@ -144,7 +145,6 @@ fun CommandRulesSection(vm: CommandRulesViewModel, openEditor: (id: String?, bas
             }
         }
     }
-    RulePreview(vm, policy)
 }
 
 @Composable

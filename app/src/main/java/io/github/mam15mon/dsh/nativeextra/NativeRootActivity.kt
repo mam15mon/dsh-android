@@ -274,71 +274,163 @@ class NativeRootActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState())
                         .navigationBarsPadding().padding(horizontal = 16.dp).padding(bottom = 24.dp),
                 ) {
-                    Spacer(Modifier.height(8.dp))
-                    SettingsCard {
-                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                StateDot(when {
-                                    root -> DotKind.Done
-                                    checkingRoot -> DotKind.Info
-                                    else -> DotKind.Idle
-                                })
-                                Text("Root 操作", Modifier.weight(1f), style = DshType.xs13m, color = c.labelTertiary)
-                                Tag(
-                                    text = if (checkingRoot) "验证中" else if (root) "已授权" else "未开启",
-                                    tone = if (root) Tone.Success else if (checkingRoot) Tone.Info else Tone.Neutral,
+                    val rootStatusCard: @Composable () -> Unit = {
+                        SettingsCard {
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    StateDot(when {
+                                        root -> DotKind.Done
+                                        checkingRoot -> DotKind.Info
+                                        else -> DotKind.Idle
+                                    })
+                                    Text("Root 操作", Modifier.weight(1f), style = DshType.xs13m, color = c.labelTertiary)
+                                    Tag(
+                                        text = if (checkingRoot) "验证中" else if (root) "已授权" else "未开启",
+                                        tone = if (root) Tone.Success else if (checkingRoot) Tone.Info else Tone.Neutral,
+                                    )
+                                }
+                                Text(
+                                    text = if (checkingRoot) "正在验证 Root 授权…" else if (root) "授权有效 · 引擎直接访问项目原目录" else "Root 未开启 · 项目配置保留，受限目录暂停访问",
+                                    style = DshType.s14m,
+                                    color = c.labelPrimary,
                                 )
+                                if (!root && !checkingRoot) {
+                                    Text("没有 Root 或未授权时，不能挂载项目。Shizuku 不能代替 Root 挂载。", style = DshType.xs13, color = c.labelSecondary)
+                                } else if (root) {
+                                    Text("Root 模式下引擎与已启用扩展均以 uid 0 运行，请仅安装可信扩展。", style = DshType.xs13, color = c.labelSecondary)
+                                }
                             }
-                            Text(
-                                text = if (checkingRoot) "正在验证 Root 授权…" else if (root) "授权有效 · 引擎直接访问项目原目录" else "Root 未开启 · 项目配置保留，受限目录暂停访问",
-                                style = DshType.s14m,
-                                color = c.labelPrimary,
-                            )
-                            if (!root && !checkingRoot) {
-                                Text("没有 Root 或未授权时，不能挂载项目。Shizuku 不能代替 Root 挂载。", style = DshType.xs13, color = c.labelSecondary)
-                            } else if (root) {
-                                Text("Root 模式下引擎与已启用扩展均以 uid 0 运行，请仅安装可信扩展。", style = DshType.xs13, color = c.labelSecondary)
-                            }
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                        ) {
-                            if (root) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                            ) {
+                                if (root) {
+                                    DButton(
+                                        text = "关闭 Root",
+                                        onClick = {
+                                            run {
+                                                RootGrant.setAllowed(this@NativeRootActivity, false)
+                                                root = false
+                                                message = "已关闭 Root，空闲时自动切换普通引擎；有任务时等待结束。项目保留，Root 目录暂停访问。"
+                                            }
+                                        },
+                                        variant = BtnVariant.Outline,
+                                        size = BtnSize.Sm,
+                                        enabled = !busy,
+                                    )
+                                }
                                 DButton(
-                                    text = "关闭 Root",
+                                    text = if (root) "验证授权" else "开启 Root",
                                     onClick = {
                                         run {
-                                            RootGrant.setAllowed(this@NativeRootActivity, false)
-                                            root = false
-                                            message = "已关闭 Root，空闲时自动切换普通引擎；有任务时等待结束。项目保留，Root 目录暂停访问。"
+                                            try {
+                                                check(RootGrant.authorize(this@NativeRootActivity)) { "未获得 Root 授权" }
+                                                val result = withContext(Dispatchers.IO) { RootConnection.service(this@NativeRootActivity).exec("id -u", 15000) }
+                                                check(result.trim() == "0\n0") { "未获得 Root 授权" }
+                                                root = true
+                                                message = "Root 授权有效，空闲时自动切换 Root 引擎；有任务时等待结束。"
+                                            } catch (e: Exception) {
+                                                root = NativeRoot.enabled(this@NativeRootActivity)
+                                                throw e
+                                            }
                                         }
                                     },
-                                    variant = BtnVariant.Outline,
                                     size = BtnSize.Sm,
-                                    enabled = !busy,
+                                    enabled = !busy && !checkingRoot,
                                 )
                             }
-                            DButton(
-                                text = if (root) "验证授权" else "开启 Root",
-                                onClick = {
-                                    run {
-                                        try {
-                                            check(RootGrant.authorize(this@NativeRootActivity)) { "未获得 Root 授权" }
-                                            val result = withContext(Dispatchers.IO) { RootConnection.service(this@NativeRootActivity).exec("id -u", 15000) }
-                                            check(result.trim() == "0\n0") { "未获得 Root 授权" }
-                                            root = true
-                                            message = "Root 授权有效，空闲时自动切换 Root 引擎；有任务时等待结束。"
-                                        } catch (e: Exception) {
-                                            root = NativeRoot.enabled(this@NativeRootActivity)
-                                            throw e
+                        }
+                    }
+
+                    val projectsSection: @Composable () -> Unit = {
+                        SettingsGroupTitle("工作项目")
+                        Text(
+                            "添加手机上的文件夹作为项目。助手直接读写原文件，修改立即影响这个文件夹。",
+                            Modifier.padding(start = 4.dp, bottom = 10.dp),
+                            style = DshType.xs13,
+                            color = c.labelTertiary,
+                        )
+
+                        if (projects.isEmpty()) {
+                            SettingsCard {
+                                EmptyNote("还没有项目，点击右上角“添加项目”选择文件夹。")
+                            }
+                        } else {
+                            SettingsCard {
+                                projects.forEachIndexed { index, project ->
+                                    val label = project.name
+                                    val path = project.path
+                                    val isCurrent = selected == path
+                                    if (index > 0) HDivider(Modifier.padding(start = 16.dp))
+                                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                            DIcon(R.drawable.dsw_folder_open_outline, size = 18.dp, tint = if (isCurrent) c.success else c.labelSecondary)
+                                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                    Text(label, style = DshType.s14m, color = c.labelPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                    if (isCurrent) Tag("当前项目", Tone.Success)
+                                                }
+                                                Text(path, style = DshType.xxs12, color = c.labelTertiary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                            }
+                                        }
+                                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+                                            IconBtn(
+                                                res = R.drawable.dsw_trash_outline,
+                                                onClick = {
+                                                    if (isCurrent) {
+                                                        NativeRoot.clearDirectory(this@NativeRootActivity)
+                                                        selected = ""
+                                                    }
+                                                    projects = projects.filterNot { it.path == path }
+                                                    store()
+                                                    message = "已移出列表，手机上的文件没有删除。"
+                                                },
+                                                enabled = !busy,
+                                                size = 32.dp,
+                                                contentDescription = "移出列表",
+                                            )
+                                            DButton(
+                                                text = if (isCurrent) "取消使用" else "使用此项目",
+                                                onClick = {
+                                                    run {
+                                                        if (isCurrent) {
+                                                            NativeRoot.clearDirectory(this@NativeRootActivity)
+                                                            selected = ""
+                                                        } else {
+                                                            canonical(path)
+                                                            NativeRoot.saveDirectory(this@NativeRootActivity, path)
+                                                            selected = path
+                                                        }
+                                                        message = "已保存默认项目。空闲时自动切换引擎；已有会话可在输入栏「+」菜单中单独切换工作项目。"
+                                                    }
+                                                },
+                                                variant = if (isCurrent) BtnVariant.Outline else BtnVariant.Primary,
+                                                size = BtnSize.Sm,
+                                                enabled = root && !busy,
+                                            )
                                         }
                                     }
-                                },
-                                size = BtnSize.Sm,
-                                enabled = !busy && !checkingRoot,
+                                }
+                            }
+                        }
+
+                        if (projects.isNotEmpty()) {
+                            Text(
+                                "设为默认项目后新建会话将自动使用；也可在任意对话的输入栏「+」菜单按会话切换项目。",
+                                Modifier.padding(start = 4.dp, top = 10.dp),
+                                style = DshType.xxs12,
+                                color = c.labelTertiary,
                             )
                         }
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+                    if (root) {
+                        projectsSection()
+                        Spacer(Modifier.height(16.dp))
+                        rootStatusCard()
+                    } else {
+                        rootStatusCard()
                     }
 
                     if (busy || message.isNotEmpty()) {
@@ -352,85 +444,7 @@ class NativeRootActivity : ComponentActivity() {
                         }
                     }
 
-                    SettingsGroupTitle("工作项目")
-                    Text(
-                        "添加手机上的文件夹作为项目。助手直接读写原文件，修改立即影响这个文件夹。",
-                        Modifier.padding(start = 4.dp, bottom = 10.dp),
-                        style = DshType.xs13,
-                        color = c.labelTertiary,
-                    )
-
-                    if (projects.isEmpty()) {
-                        SettingsCard {
-                            EmptyNote("还没有项目，点击右上角“添加项目”选择文件夹。")
-                        }
-                    } else {
-                        SettingsCard {
-                            projects.forEachIndexed { index, project ->
-                                val label = project.name
-                                val path = project.path
-                                val isCurrent = selected == path
-                                if (index > 0) HDivider(Modifier.padding(start = 16.dp))
-                                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                        DIcon(R.drawable.dsw_folder_open_outline, size = 18.dp, tint = if (isCurrent) c.success else c.labelSecondary)
-                                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                                Text(label, style = DshType.s14m, color = c.labelPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                                if (isCurrent) Tag("当前项目", Tone.Success)
-                                            }
-                                            Text(path, style = DshType.xxs12, color = c.labelTertiary, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                        }
-                                    }
-                                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
-                                        IconBtn(
-                                            res = R.drawable.dsw_trash_outline,
-                                            onClick = {
-                                                if (isCurrent) {
-                                                    NativeRoot.clearDirectory(this@NativeRootActivity)
-                                                    selected = ""
-                                                }
-                                                projects = projects.filterNot { it.path == path }
-                                                store()
-                                                message = "已移出列表，手机上的文件没有删除。"
-                                            },
-                                            enabled = !busy,
-                                            size = 32.dp,
-                                            contentDescription = "移出列表",
-                                        )
-                                        DButton(
-                                            text = if (isCurrent) "取消使用" else "使用此项目",
-                                            onClick = {
-                                                run {
-                                                    if (isCurrent) {
-                                                        NativeRoot.clearDirectory(this@NativeRootActivity)
-                                                        selected = ""
-                                                    } else {
-                                                        canonical(path)
-                                                        NativeRoot.saveDirectory(this@NativeRootActivity, path)
-                                                        selected = path
-                                                    }
-                                                    message = "已保存默认项目。空闲时自动切换引擎；已有会话可在输入栏「+」菜单中单独切换工作项目。"
-                                                }
-                                            },
-                                            variant = if (isCurrent) BtnVariant.Outline else BtnVariant.Primary,
-                                            size = BtnSize.Sm,
-                                            enabled = root && !busy,
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if (projects.isNotEmpty()) {
-                        Text(
-                            "设为默认项目后新建会话将自动使用；也可在任意对话的输入栏「+」菜单按会话切换项目。",
-                            Modifier.padding(start = 4.dp, top = 10.dp),
-                            style = DshType.xxs12,
-                            color = c.labelTertiary,
-                        )
-                    }
+                    if (!root) projectsSection()
                 }
             }
         }
