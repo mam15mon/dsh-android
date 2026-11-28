@@ -55,6 +55,11 @@
   - `Condition` 新增 `wifi`、`screen`（`on`/`off`/`unlocked`/`locked`）、`bluetooth` 持续状态条件，接入 `TriggerHub.collectDeviceState()` 懒采集系统状态。
   - 列表/详情 UI 展示多触发标签、排除词与新条件，并同步更新 `RuleTools.RULE_DOC`、三语资源与单测。
 
+- [x] **独立全屏可视化规则编辑器（`RuleEditorScreen`）**
+  - 新增 `RuleEditorRoute` 与 `RuleEditorScreen.kt`，支持从零手动创建、详情页进入全屏编辑以及从 5 个结构化模板直接载入编辑器。
+  - 支持可视化逐条添加/修改/删除多触发器（OR，含 12 种触发器与星期胶囊点选）与状态条件（AND，全部 7 种条件）、直接编辑智能体 Prompt/工具权限/专用模型/Root 工作项目、切换常用铃声固定动作、设置防抖冷却与成功通知开关。
+  - 更新 `BackNavigationTest` 覆盖新编辑页返回栈路径。
+
 ## 待办 / 需确认项
 
 - [ ] **R8 混淆与资源裁剪真机验证**（`app/build.gradle.kts` 当前保持 `isMinifyEnabled = false` / `isShrinkResources = false`；开启前需在真机上完整验证 JNI、Shizuku、RootService 反射与序列化流程）。

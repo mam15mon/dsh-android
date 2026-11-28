@@ -41,7 +41,7 @@ class BackNavigationTest {
     }
 
     private val routeClasses = listOf(HomeRoute::class, OnboardingRoute::class, OnboardingKeyRoute::class, EnhanceRoute::class, PlatformWebRoute::class,
-        AutomationRoute::class, RuleRoute::class, SettingsRoute::class, SectionRoute::class, ProviderRoute::class, ModeRoute::class, CommandRuleEditRoute::class, PluginRoute::class,
+        AutomationRoute::class, RuleRoute::class, RuleEditorRoute::class, SettingsRoute::class, SectionRoute::class, ProviderRoute::class, ModeRoute::class, CommandRuleEditRoute::class, PluginRoute::class,
         MarketEntryRoute::class, IndexesRoute::class, McpRoute::class, AppNotesRoute::class, AppNotesGroupRoute::class, NotifAppsRoute::class)
 
     private fun routeOf(e: NavBackStackEntry): Any = e.toRoute(routeClasses.first { e.destination.hasRoute(it) })
@@ -56,7 +56,10 @@ class BackNavigationTest {
     /** Every page with the path that leads to it (each step a plain navigate from the previous page). */
     private val hierarchy: List<List<Route>> = buildList {
         add(home + AutomationRoute)
+        add(home + AutomationRoute + RuleEditorRoute())
+        add(home + AutomationRoute + RuleEditorRoute(template = "morning_brief"))
         add(home + AutomationRoute + RuleRoute("7"))
+        add(home + AutomationRoute + RuleRoute("7") + RuleEditorRoute(id = "7"))
         add(settings)
         SettingsSection.entries.forEach { add(settings + section(it)) }
         val model = settings + section(SettingsSection.Model)

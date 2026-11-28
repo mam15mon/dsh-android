@@ -24,6 +24,7 @@ import io.github.mam15mon.dsh.feature.account.LocalAccount
 import io.github.mam15mon.dsh.feature.account.PlatformWebScreen
 import io.github.mam15mon.dsh.feature.automation.AutomationScreen
 import io.github.mam15mon.dsh.feature.automation.RuleDetailScreen
+import io.github.mam15mon.dsh.feature.automation.RuleEditorScreen
 import io.github.mam15mon.dsh.feature.conversation.HomeScreen
 import io.github.mam15mon.dsh.feature.conversation.HomeViewModel
 import io.github.mam15mon.dsh.feature.extensions.ExtensionsSubPage
@@ -63,6 +64,8 @@ fun NavGraphBuilder.dshGraph(nav: NavHostController, home: () -> HomeViewModel) 
             onBack = { nav.up(e) },
             onNew = { prefill -> home().newSession(prefill); nav.toHome() },
             onOpenRule = { open(RuleRoute(it.toString())) },
+            onCreateManual = { open(RuleEditorRoute()) },
+            onCreateFromTemplate = { key -> open(RuleEditorRoute(template = key)) },
             onOpenSession = { sid -> home().open(sid); nav.toHome() },
             onOpenPermissions = { nav.openSettings(SettingsSection.Phone.name) },
         )
@@ -71,9 +74,13 @@ fun NavGraphBuilder.dshGraph(nav: NavHostController, home: () -> HomeViewModel) 
         RuleDetailScreen(
             onBack = { nav.up(e) },
             onOpenSession = { sid -> home().open(sid); nav.toHome() },
+            onEdit = { id -> open(RuleEditorRoute(id = id.toString())) },
             onEditInChat = { prefill -> home().newSession(prefill); nav.toHome() },
             onOpenPermissions = { nav.openSettings(SettingsSection.Phone.name) },
         )
+    }
+    composable<RuleEditorRoute> { e ->
+        RuleEditorScreen(onBack = { nav.up(e) }, onSaved = { nav.up(e) })
     }
     navigation<SettingsGraph>(startDestination = SettingsRoute) {
         composable<SettingsRoute> { e -> InSettings(nav, e) { SettingsIndexScreen(onBack = { nav.up(e) }, open = open) } }

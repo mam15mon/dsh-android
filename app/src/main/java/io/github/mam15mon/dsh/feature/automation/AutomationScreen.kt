@@ -6,8 +6,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -38,7 +36,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -88,7 +85,6 @@ import io.github.mam15mon.dsh.core.model.RuleSpec
 import io.github.mam15mon.dsh.core.model.Trigger
 import io.github.mam15mon.dsh.core.provider.DEEPSEEK_MODELS
 import io.github.mam15mon.dsh.core.trigger.TriggerHub
-import io.github.mam15mon.dsh.feature.conversation.ToolPresentation
 import io.github.mam15mon.dsh.feature.settings.isZh
 import io.github.mam15mon.dsh.nativeextra.NativeRoot
 import io.github.mam15mon.dsh.nativeextra.RootProject
@@ -114,6 +110,8 @@ class AutomationViewModel @Inject constructor(
     val rules = dao.observe().map { list -> list.map { RuleRow(it, hub.decode(it)) } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     private val ruleId: Long? = saved.get<String>("id")?.toLongOrNull()
+    val editingRuleId: Long? = ruleId
+    val templateKey: String? = saved.get<String>("template")
     val rule = (ruleId?.let { id -> dao.observeOne(id).map { e -> e?.let { RuleRow(it, hub.decode(it)) } } } ?: emptyFlow())
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
     val runs: Flow<List<RuleRunEntity>> = ruleId?.let { dao.runs(it) } ?: emptyFlow()
@@ -144,64 +142,22 @@ class AutomationViewModel @Inject constructor(
         onDone(res)
     }
 
-    fun quickEdit(id: Long, transform: (RuleSpec) -> RuleSpec, onDone: (Result<RuleSpec>) -> Unit) = viewModelScope.launch {
-        onDone(hub.editSpec(id, transform))
+    fun createRule(spec: RuleSpec, onDone: (Result<Long>) -> Unit) = viewModelScope.launch {
+        val res = try {
+            Result.success(hub.create(spec))
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Result.failure(e)
+        }
+        onDone(res)
+    }
+
+    fun saveEditedRule(id: Long, spec: RuleSpec, onDone: (Result<RuleSpec>) -> Unit) = viewModelScope.launch {
+        onDone(hub.editSpec(id) { spec })
     }
 }
 
 private enum class RuleFilter { All, On, Off }
-
-private data class RuleTemplate(
-    val titleZh: String,
-    val titleEn: String,
-    val descZh: String,
-    val descEn: String,
-    val promptZh: String,
-    val promptEn: String,
-)
-
-private val RULE_TEMPLATES = listOf(
-    RuleTemplate(
-        "早间重要通知摘要",
-        "Morning notification brief",
-        "每天 08:00 · 智能体汇总未读重要消息",
-        "Daily 08:00 · Summarize unread notifications",
-        "帮我创建一个自动化任务：每天 08:00 自动读取未读通知，总结重要消息并列出需要处理的事项，不重要的推广通知忽略。",
-        "Create an automation: every day at 08:00, read unread notifications and summarize the important ones.",
-    ),
-    RuleTemplate(
-        "睡前自动静音",
-        "Bedtime silent mode",
-        "每天 23:00 · 固定动作免 token 调成静音",
-        "Daily 23:00 · Fixed steps (no tokens) set silent",
-        "帮我创建一个自动化任务：每天 23:00 用固定步骤（sound_mode）把手机调成静音模式，静默运行不耗费模型 token。",
-        "Create an automation: every day at 23:00, use fixed steps (sound_mode) to switch the phone to silent mode without using model tokens.",
-    ),
-    RuleTemplate(
-        "低电量省电提醒",
-        "Low-battery check",
-        "电量降到 20% · 检查耗电应用并提醒",
-        "Battery drops to 20% · Check status and alert",
-        "帮我创建一个自动化任务：当未充电且电量降到 20% 时，提醒我并简要汇报当前连接状态与高耗电情况。",
-        "Create an automation: when unplugged and battery drops to 20%, notify me with a brief device status check.",
-    ),
-    RuleTemplate(
-        "手动一键整理今日待办",
-        "Manual daily recap",
-        "手动触发 · 点击即跑，汇总今天的消息与事项",
-        "Manual trigger · Run on demand to summarize today",
-        "帮我创建一个手动触发（trigger type 为 manual）的自动化任务：一键读取今天收到的重要通知，按优先级整理成今日待办清单。",
-        "Create a manual automation (trigger type: manual): on demand, read today's notifications and organize a prioritized todo summary.",
-    ),
-    RuleTemplate(
-        "连上指定 Wi‑Fi 自动静音",
-        "Silent on office Wi‑Fi",
-        "连上 Wi‑Fi · 固定动作免 token 静音",
-        "Wi‑Fi connected · Fixed steps (no tokens) mute",
-        "帮我创建一个自动化任务：连上指定 Wi‑Fi（先问我 Wi‑Fi 名称）时，用固定步骤（sound_mode）把手机切到震动或静音。",
-        "Create an automation: when connected to a specific Wi-Fi (ask me the SSID first), use fixed steps (sound_mode) to set vibrate or silent.",
-    ),
-)
 
 @Composable
 private fun rememberResumeTick(): Int {
@@ -217,13 +173,15 @@ private fun rememberResumeTick(): Int {
 
 /**
  * dsh 自动化任务 list: search, filter strip, permission warnings, next trigger time, quick templates,
- * and one-tap manual execution.
+ * visual creation, and one-tap manual execution.
  */
 @Composable
 fun AutomationScreen(
     onBack: () -> Unit,
     onNew: (String) -> Unit,
     onOpenRule: (Long) -> Unit,
+    onCreateManual: () -> Unit = {},
+    onCreateFromTemplate: (String) -> Unit = {},
     onOpenSession: (String) -> Unit = {},
     onOpenPermissions: () -> Unit = {},
     vm: AutomationViewModel = hiltViewModel(),
@@ -235,6 +193,7 @@ fun AutomationScreen(
     val rules by vm.rules.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf(RuleFilter.All) }
+    var newChoiceOpen by remember { mutableStateOf(false) }
     var templatesOpen by remember { mutableStateOf(false) }
     var busyRuleId by remember { mutableStateOf<Long?>(null) }
     var statusBanner by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
@@ -254,7 +213,7 @@ fun AutomationScreen(
     Column(Modifier.fillMaxSize().background(c.bgBase).statusBarsPadding().imePadding()) {
         DTopBar(stringResource(R.string.automation), onBack) {
             DButton(stringResource(R.string.rule_templates_btn), { templatesOpen = true }, variant = BtnVariant.Ghost, size = BtnSize.Sm)
-            DButton(stringResource(R.string.new_), { onNew(context.getString(R.string.new_rule_prefill)) }, size = BtnSize.Sm, icon = R.drawable.dsw_plus_outline, modifier = Modifier.padding(end = 8.dp))
+            DButton(stringResource(R.string.new_), { newChoiceOpen = true }, size = BtnSize.Sm, icon = R.drawable.dsw_plus_outline, modifier = Modifier.padding(end = 8.dp))
         }
         Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             DInput(query, { query = it }, placeholder = stringResource(R.string.search_rules), minHeight = 36.dp)
@@ -292,7 +251,10 @@ fun AutomationScreen(
                         Spacer(Modifier.height(6.dp))
                         Text(stringResource(R.string.rules_empty_body), style = DshType.xs13, color = c.labelTertiary)
                         Spacer(Modifier.height(14.dp))
-                        DButton(stringResource(R.string.new_rule_via_chat), { onNew(context.getString(R.string.new_rule_prefill)) }, variant = BtnVariant.Outline)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            DButton(stringResource(R.string.rule_new_manual), onCreateManual, size = BtnSize.Sm)
+                            DButton(stringResource(R.string.new_rule_via_chat), { onNew(context.getString(R.string.new_rule_prefill)) }, variant = BtnVariant.Outline, size = BtnSize.Sm)
+                        }
                     }
                 }
                 item { SettingsGroupTitle(stringResource(R.string.rule_templates_title)) }
@@ -303,7 +265,7 @@ fun AutomationScreen(
                                 title = if (zh) tpl.titleZh else tpl.titleEn,
                                 description = if (zh) tpl.descZh else tpl.descEn,
                                 divider = idx > 0,
-                                onClick = { onNew(if (zh) tpl.promptZh else tpl.promptEn) },
+                                onClick = { onCreateFromTemplate(tpl.key) },
                             )
                         }
                     }
@@ -348,6 +310,35 @@ fun AutomationScreen(
         }
     }
 
+    if (newChoiceOpen) {
+        DDialog(
+            onDismiss = { newChoiceOpen = false },
+            title = stringResource(R.string.rule_editor_new_title),
+            buttons = { DButton(stringResource(R.string.cancel), { newChoiceOpen = false }, variant = BtnVariant.Outline, size = BtnSize.Sm) },
+        ) {
+            SettingsCard {
+                SettingsRow(
+                    title = stringResource(R.string.rule_new_manual),
+                    description = stringResource(R.string.rule_new_manual_desc),
+                    divider = false,
+                    onClick = { newChoiceOpen = false; onCreateManual() },
+                )
+                SettingsRow(
+                    title = stringResource(R.string.rule_new_ai),
+                    description = stringResource(R.string.rule_new_ai_desc),
+                    divider = true,
+                    onClick = { newChoiceOpen = false; onNew(context.getString(R.string.new_rule_prefill)) },
+                )
+                SettingsRow(
+                    title = stringResource(R.string.rule_new_template),
+                    description = stringResource(R.string.rule_new_template_desc),
+                    divider = true,
+                    onClick = { newChoiceOpen = false; templatesOpen = true },
+                )
+            }
+        }
+    }
+
     if (templatesOpen) {
         DDialog(
             onDismiss = { templatesOpen = false },
@@ -356,14 +347,14 @@ fun AutomationScreen(
         ) {
             Text(stringResource(R.string.rule_templates_subtitle), style = DshType.xs13, color = c.labelTertiary)
             LazyColumn(Modifier.heightIn(max = 320.dp)) {
-                items(RULE_TEMPLATES, key = { it.titleEn }) { tpl ->
+                items(RULE_TEMPLATES, key = { it.key }) { tpl ->
                     SettingsRow(
                         title = if (zh) tpl.titleZh else tpl.titleEn,
                         description = if (zh) tpl.descZh else tpl.descEn,
                         divider = false,
                         onClick = {
                             templatesOpen = false
-                            onNew(if (zh) tpl.promptZh else tpl.promptEn)
+                            onCreateFromTemplate(tpl.key)
                         },
                     )
                 }
@@ -445,7 +436,7 @@ private fun RuleCard(
     }
 }
 
-private fun triggerIcon(t: Trigger?): Int = when (t) {
+internal fun triggerIcon(t: Trigger?): Int = when (t) {
     is Trigger.Time -> R.drawable.dsw_alarm_clock_outline
     is Trigger.Manual -> R.drawable.dsw_play_outline
     is Trigger.Notification -> R.drawable.dsw_info_outline
@@ -455,11 +446,12 @@ private fun triggerIcon(t: Trigger?): Int = when (t) {
     else -> R.drawable.dsw_clock_outline
 }
 
-/** Rule detail: prerequisites, one-tap run & quick edit, trigger/conditions, action, tools, runs, delete. */
+/** Rule detail: prerequisites, one-tap run & full visual edit, trigger/conditions, action, tools, runs, delete. */
 @Composable
 fun RuleDetailScreen(
     onBack: () -> Unit,
     onOpenSession: (String) -> Unit,
+    onEdit: (Long) -> Unit = {},
     onEditInChat: (String) -> Unit = {},
     onOpenPermissions: () -> Unit = {},
     vm: AutomationViewModel = hiltViewModel(),
@@ -472,7 +464,8 @@ fun RuleDetailScreen(
     val runs by vm.runs.collectAsStateWithLifecycle(emptyList())
     var deleting by remember { mutableStateOf(false) }
     var editingTools by remember { mutableStateOf(false) }
-    var quickEditing by remember { mutableStateOf(false) }
+    var toolsSaving by remember { mutableStateOf(false) }
+    var toolsFailed by remember { mutableStateOf(false) }
     var runningNow by remember { mutableStateOf(false) }
     var runNotice by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
 
@@ -533,7 +526,7 @@ fun RuleDetailScreen(
                         size = BtnSize.Sm,
                         icon = R.drawable.dsw_play_outline,
                     )
-                    DButton(stringResource(R.string.rule_quick_edit), { quickEditing = true }, variant = BtnVariant.Outline, size = BtnSize.Sm)
+                    DButton(stringResource(R.string.rule_edit), { onEdit(r.entity.id) }, variant = BtnVariant.Outline, size = BtnSize.Sm)
                     DButton(
                         stringResource(R.string.rule_edit_in_chat),
                         { onEditInChat(context.getString(R.string.rule_edit_chat_prefill, r.entity.id, s.name)) },
@@ -606,7 +599,7 @@ fun RuleDetailScreen(
                         Text(stringResource(R.string.rule_allowed_tools), style = DshType.xs13m, color = c.labelTertiary)
                         Text(s.allowedTools.joinToString(", ").ifEmpty { stringResource(R.string.automation_no_tools) }, style = DshType.mono12, color = c.labelSecondary)
                         if (s.action is RuleAction.Agent) {
-                            DButton(stringResource(R.string.automation_edit_tools), { editingTools = true }, variant = BtnVariant.Outline, size = BtnSize.Sm)
+                            DButton(stringResource(R.string.automation_edit_tools), { toolsFailed = false; editingTools = true }, variant = BtnVariant.Outline, size = BtnSize.Sm)
                         }
                     }
                 }
@@ -647,201 +640,28 @@ fun RuleDetailScreen(
             Spacer(Modifier.height(24.dp))
         }
     }
-    if (editingTools && r?.spec != null) AllowedToolsDialog(r, vm) { editingTools = false }
-    if (quickEditing && r?.spec != null) QuickEditRuleDialog(r.entity.id, r.spec, vm) { quickEditing = false }
+    if (editingTools && r?.spec != null) {
+        val initial = r.spec.allowedTools.toSet()
+        ToolPickerDialog(
+            initial = initial,
+            allTools = vm.editableTools(),
+            saving = toolsSaving,
+            failed = toolsFailed,
+            onDismiss = { editingTools = false },
+            onConfirm = { selected ->
+                toolsSaving = true
+                toolsFailed = false
+                vm.saveAllowedTools(r.entity.id, selected - initial, initial - selected) { ok ->
+                    toolsSaving = false
+                    if (ok) editingTools = false else toolsFailed = true
+                }
+            },
+        )
+    }
     if (deleting && r != null) DDialog({ deleting = false }, stringResource(R.string.delete_rule), buttons = {
         DButton(stringResource(R.string.cancel), { deleting = false }, variant = BtnVariant.Outline)
         DButton(stringResource(R.string.delete), { deleting = false; vm.delete(r.entity.id); onBack() }, variant = BtnVariant.Danger)
     }) { Text(stringResource(R.string.delete_rule_body), style = DshType.s14) }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun QuickEditRuleDialog(id: Long, spec: RuleSpec, vm: AutomationViewModel, onDismiss: () -> Unit) {
-    val c = Dsh.colors
-    val settings by vm.settings.collectAsStateWithLifecycle()
-    val rootEnabled = remember(id) { vm.rootEnabled() }
-    val rootProjects = remember(id, rootEnabled) { if (rootEnabled) vm.rootProjects() else emptyList() }
-
-    var name by remember(id) { mutableStateOf(spec.name) }
-    val allManual = spec.allTriggers.all { it is Trigger.Manual }
-    val timeTrigger = spec.trigger as? Trigger.Time
-    val notifTrigger = spec.trigger as? Trigger.Notification
-    var atText by remember(id) { mutableStateOf(timeTrigger?.at.orEmpty()) }
-    var everyText by remember(id) { mutableStateOf(timeTrigger?.everyMinutes?.toString().orEmpty()) }
-    var keyword by remember(id) { mutableStateOf(notifTrigger?.keyword.orEmpty()) }
-    var prompt by remember(id) { mutableStateOf((spec.action as? RuleAction.Agent)?.prompt.orEmpty()) }
-    var cooldownText by remember(id) { mutableStateOf(spec.cooldownSeconds.toString()) }
-    var notifyOnSuccess by remember(id) { mutableStateOf(spec.notifyOnSuccess) }
-    var modelProvider by remember(id) { mutableStateOf(spec.modelProvider) }
-    var modelId by remember(id) { mutableStateOf(spec.modelId) }
-    var workspace by remember(id) { mutableStateOf(spec.workspace) }
-    var saving by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-
-    DDialog(
-        onDismiss = { if (!saving) onDismiss() },
-        title = stringResource(R.string.rule_quick_edit),
-        buttons = {
-            DButton(stringResource(R.string.cancel), onDismiss, enabled = !saving, variant = BtnVariant.Outline)
-            DButton(
-                text = stringResource(R.string.save),
-                onClick = {
-                    val cooldown = if (allManual) spec.cooldownSeconds else cooldownText.trim().toIntOrNull()
-                    if (cooldown == null) {
-                        error = "Invalid cooldown"
-                        return@DButton
-                    }
-                    val every = if (timeTrigger?.everyMinutes != null) everyText.trim().toIntOrNull() else null
-                    if (timeTrigger?.everyMinutes != null && every == null) {
-                        error = "Invalid interval"
-                        return@DButton
-                    }
-                    saving = true
-                    error = null
-                    vm.quickEdit(
-                        id = id,
-                        transform = { cur ->
-                            val nextTrigger = when (val t = cur.trigger) {
-                                is Trigger.Time -> when {
-                                    t.at != null -> t.copy(at = atText)
-                                    t.everyMinutes != null -> t.copy(everyMinutes = every)
-                                    else -> t
-                                }
-                                is Trigger.Notification -> t.copy(keyword = keyword.trim().takeIf { it.isNotEmpty() })
-                                else -> t
-                            }
-                            val nextAction = when (val a = cur.action) {
-                                is RuleAction.Agent -> a.copy(prompt = prompt)
-                                is RuleAction.Steps -> a
-                            }
-                            cur.copy(
-                                name = name.trim(),
-                                trigger = nextTrigger,
-                                action = nextAction,
-                                cooldownSeconds = cooldown,
-                                notifyOnSuccess = notifyOnSuccess,
-                                modelProvider = modelProvider,
-                                modelId = modelId,
-                                workspace = workspace,
-                            )
-                        },
-                    ) { result ->
-                        saving = false
-                        result.onSuccess { onDismiss() }.onFailure { error = it.message ?: it.javaClass.simpleName }
-                    }
-                },
-                enabled = !saving && name.isNotBlank(),
-            )
-        },
-    ) {
-        Column(
-            Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text(stringResource(R.string.rule_name_label), style = DshType.xs13m, color = c.labelSecondary)
-            DInput(name, { name = it }, minHeight = 36.dp)
-
-            if (timeTrigger?.at != null) {
-                Text(stringResource(R.string.rule_time_at_label), style = DshType.xs13m, color = c.labelSecondary)
-                DInput(atText, { atText = it }, placeholder = "08:00", minHeight = 36.dp)
-            }
-            if (timeTrigger?.everyMinutes != null) {
-                Text(stringResource(R.string.rule_interval_label), style = DshType.xs13m, color = c.labelSecondary)
-                DInput(everyText, { everyText = it }, keyboardType = KeyboardType.Number, minHeight = 36.dp)
-            }
-            if (notifTrigger != null) {
-                Text(stringResource(R.string.rule_keyword_label), style = DshType.xs13m, color = c.labelSecondary)
-                DInput(keyword, { keyword = it }, minHeight = 36.dp)
-            }
-            if (spec.action is RuleAction.Agent) {
-                Text(stringResource(R.string.rule_prompt_label), style = DshType.xs13m, color = c.labelSecondary)
-                DInput(prompt, { prompt = it }, singleLine = false, minHeight = 88.dp)
-            }
-            if (!allManual) {
-                Text(stringResource(R.string.rule_cooldown_label), style = DshType.xs13m, color = c.labelSecondary)
-                DInput(cooldownText, { cooldownText = it }, keyboardType = KeyboardType.Number, minHeight = 36.dp)
-            }
-            SettingsRow(
-                title = stringResource(R.string.rule_notify_switch),
-                divider = false,
-                trailing = { DSwitch(notifyOnSuccess, { notifyOnSuccess = it }) },
-            )
-            if (spec.action is RuleAction.Agent) {
-                Text(stringResource(R.string.rule_model_label), style = DshType.xs13m, color = c.labelSecondary)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    FilterPill(stringResource(R.string.rule_model_default), modelId == null) {
-                        modelProvider = null; modelId = null
-                    }
-                    DEEPSEEK_MODELS.forEach { (mid, label) ->
-                        FilterPill(label, modelProvider == "" && modelId == mid) {
-                            modelProvider = ""; modelId = mid
-                        }
-                    }
-                    settings?.providers.orEmpty().filter { it.enabled }.forEach { prov ->
-                        prov.models.forEach { mid ->
-                            FilterPill("${prov.name} / $mid", modelProvider == prov.id && modelId == mid) {
-                                modelProvider = prov.id; modelId = mid
-                            }
-                        }
-                    }
-                }
-                if (rootEnabled) {
-                    Text(stringResource(R.string.rule_workspace_label), style = DshType.xs13m, color = c.labelSecondary)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        FilterPill(stringResource(R.string.rule_workspace_default), workspace == null) { workspace = null }
-                        FilterPill(stringResource(R.string.rule_workspace_app_home), workspace == "") { workspace = "" }
-                        rootProjects.forEach { proj ->
-                            FilterPill(proj.name, workspace == proj.path) { workspace = proj.path }
-                        }
-                    }
-                }
-            }
-            error?.let { Text(it, style = DshType.xs13, color = c.error) }
-        }
-    }
-}
-
-@Composable
-private fun AllowedToolsDialog(row: RuleRow, vm: AutomationViewModel, onDismiss: () -> Unit) {
-    val initial = remember(row.entity.id) { row.spec?.allowedTools.orEmpty().toSet() }
-    var selected by remember(row.entity.id) { mutableStateOf(initial) }
-    var names by remember(row.entity.id) { mutableStateOf((vm.editableTools() + selected).toSortedSet()) }
-    var query by remember { mutableStateOf("") }
-    var saving by remember { mutableStateOf(false) }
-    var failed by remember { mutableStateOf(false) }
-    val searched = query.trim()
-    val canAdd = searched.matches(Regex("[A-Za-z0-9_][A-Za-z0-9_.:-]*")) && searched !in names
-    DDialog({ if (!saving) onDismiss() }, stringResource(R.string.automation_edit_tools), buttons = {
-        DButton(stringResource(R.string.cancel), onDismiss, enabled = !saving, variant = BtnVariant.Outline)
-        DButton(stringResource(R.string.save), {
-            saving = true
-            vm.saveAllowedTools(row.entity.id, selected - initial, initial - selected) { ok ->
-                saving = false
-                if (ok) onDismiss() else failed = true
-            }
-        }, enabled = !saving && selected != initial)
-    }) {
-        DInput(query, { query = it }, placeholder = stringResource(R.string.automation_find_tool))
-        if (canAdd) DButton(stringResource(R.string.automation_add_named_tool, searched), {
-            names = (names + searched).toSortedSet()
-            selected = selected + searched
-            query = ""
-        }, enabled = !saving, variant = BtnVariant.Outline, size = BtnSize.Sm)
-        val labels = names.map { name ->
-            val title = ToolPresentation.info(name).title
-            name to if (title == R.string.tool_generic) name else stringResource(title)
-        }
-        val shown = labels.filter { (name, label) -> name.contains(searched, true) || label.contains(searched, true) }
-        LazyColumn(Modifier.heightIn(max = 280.dp)) {
-            items(shown, key = { it.first }) { (name, label) ->
-                SettingsRow(label, name.takeUnless { it == label }, divider = false, trailing = {
-                    DSwitch(name in selected, { on -> selected = if (on) selected + name else selected - name }, enabled = !saving)
-                })
-            }
-        }
-        if (failed) Text(stringResource(R.string.automation_tools_save_failed), style = DshType.xs13, color = Dsh.colors.error)
-    }
 }
 
 fun describeTrigger(t: Trigger, zh: Boolean): String = when (t) {

@@ -34,6 +34,8 @@ sealed interface Route
 @Serializable data object AutomationRoute : Route
 /** A rule; id as a string (AutomationViewModel reads it from the SavedStateHandle). */
 @Serializable data class RuleRoute(val id: String) : Route
+/** Visual automation editor: edits [id] when set, or creates a new rule (optionally seeded from [template]). */
+@Serializable data class RuleEditorRoute(val id: String? = null, val template: String? = null) : Route
 
 /** The settings graph: its entry scopes the ViewModels the settings pages share. */
 @Serializable data object SettingsGraph
