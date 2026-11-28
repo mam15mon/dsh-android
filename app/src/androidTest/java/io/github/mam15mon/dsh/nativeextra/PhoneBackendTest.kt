@@ -24,13 +24,12 @@ import kotlinx.serialization.json.JsonObject
 /** Separate test APK: exercises the real Root Binder service without calling a model. */
 class PhoneBackendTest : Instrumentation() {
     private var filesOnly = false
-    private var mountOnly = false
     private var appOnly = false
     private var ballPersistence = ""
     private var ballOnly = false
     private var engineOnly = false
     private var stopOnly = false
-    override fun onCreate(arguments: Bundle?) { stopOnly = arguments?.getString("stop_only") == "true"; ballPersistence = arguments?.getString("ball_persistence").orEmpty(); ballOnly = arguments?.getString("ball_only") == "true"; engineOnly = arguments?.getString("engine_only") == "true"; filesOnly = arguments?.getString("files_only") == "true"; mountOnly = arguments?.getString("mount_only") == "true"; appOnly = arguments?.getString("app_only") == "true"; super.onCreate(arguments); start() }
+    override fun onCreate(arguments: Bundle?) { stopOnly = arguments?.getString("stop_only") == "true"; ballPersistence = arguments?.getString("ball_persistence").orEmpty(); ballOnly = arguments?.getString("ball_only") == "true"; engineOnly = arguments?.getString("engine_only") == "true"; filesOnly = arguments?.getString("files_only") == "true"; appOnly = arguments?.getString("app_only") == "true"; super.onCreate(arguments); start() }
     override fun onStart() {
         val result = Bundle()
         if (stopOnly) {
@@ -171,32 +170,6 @@ class PhoneBackendTest : Instrumentation() {
                 val visible = service.fsList(rootPath, false, 2000).lineSequence().count { it.startsWith("d\t") }
                 check(visible == expected.output.trim().toInt()) { "Root service sees $visible app directories; global root sees ${expected.output.trim()}" }
                 result.putString("global_root_view", "PASS ($visible app directories)")
-                if (mountOnly) {
-                    val raw = context.cacheDir.path + "/root-workspace-test-${System.nanoTime()}"
-                    val canonical = NativeRoot.exec(targetContext, "mkdir -p ${NativeRoot.quote(raw)} && realpath -- ${NativeRoot.quote(raw)}")
-                    check(canonical.code == 0)
-                    val source = canonical.output.trim()
-                    val target = java.io.File(targetContext.cacheDir.canonicalFile, "mount-test-${System.nanoTime()}")
-                    check(target.mkdir())
-                    val helper = java.io.File(targetContext.applicationInfo.nativeLibraryDir, "libdshworkspace.so")
-                    var process: Process? = null
-                    try {
-                        ParcelFileDescriptor.AutoCloseOutputStream(service.fsOpen("$source/sentinel", "w")).use { it.write("before".toByteArray()) }
-                        process = ProcessBuilder("su", "--mount-master", "-c", "exec timeout 15 ${NativeRoot.quote(helper.path)} ${android.os.Process.myPid()} ${android.os.Process.myUid()} ${NativeRoot.quote(source)} ${NativeRoot.quote(target.path)}").redirectErrorStream(true).start()
-                        check(process.inputStream.bufferedReader().readLine() == "READY") { "临时直连挂载失败" }
-                        val file = java.io.File(target, "sentinel")
-                        check(file.readText() == "before")
-                        file.writeText("after")
-                        check(ParcelFileDescriptor.AutoCloseInputStream(service.fsOpen("$source/sentinel", "r")).use { it.readBytes().decodeToString() } == "after")
-                        result.putString("isolated_app_workspace", "PASS (read/write original test-app cache through FUSE)")
-                    } finally {
-                        process?.outputStream?.close()
-                        process?.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)
-                        check(target.delete()) { "临时挂载未正常卸载" }
-                        service.fsDelete(source)
-                    }
-                    return@runBlocking
-                }
                 val activity = startActivitySync(Intent(targetContext, NativeRootActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 waitForIdleSync()
                 try {

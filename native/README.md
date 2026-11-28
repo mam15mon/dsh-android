@@ -16,7 +16,7 @@ Node's `require-builtin` addon is not built: the engine runs with `--expose-inte
 
 ## Android app inputs
 
-Gradle packages the ARM64 libraries under `app/src/main/jniLibs/arm64-v8a/`. When updating the prebuilt inputs, copy the verified outputs into that directory. The workspace helper `libdshworkspace.so` comes from `tools/root-workspace.c`.
+Gradle packages the ARM64 libraries under `app/src/main/jniLibs/arm64-v8a/`. When updating the prebuilt inputs, copy the verified outputs into that directory.
 
 The JNI wrapper targets `io.github.mam15mon.dsh.engine.NodeRuntime`. A namespace change requires
 rebuilding and copying `libdshengine.so` as well as updating the Kotlin class; `libnode.so` is reusable.

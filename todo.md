@@ -32,10 +32,13 @@
   - `Composer` 的 `+`/`/` 菜单在开启 Root 时新增「工作项目」切换弹窗（支持应用私有目录与已添加项目即时切换）。
   - `NativeRootActivity` 复用 `NativeRoot.projects`/`saveProjects` 与 `RootConnection` 执行 `canonical()` 避免重复冷起 `su`，修正过时文案并补充 `uid 0` 扩展安全提示。
   - 修复 `PrivilegedScreen` 副屏已销毁时 `getDisplay(display)` 的空指针风险，为 `AppDirectoryPicker` 添加 `LruCache` 应用图标缓存。
+- [x] **细化 Root 模式提示词分工并重编引擎**
   - 细化 Root 模式下 `bash` 与 `phone_sh` 的系统提示词分工并重编 `engine.zip`（`0.2.2-rc.5-abc7fb242ea`）。
+
+- [x] **确认精选源与清理废弃 FUSE 挂载产物**
+  - 确认 `MarketIndex.CURATED_URL` 与 `js/packages/plugin-extensions/boot.js` 继续复用上游 `jackwener/DSH-Android` 精选插件市场索引。
+  - 删除无生产调用方的废弃 FUSE 挂载产物 `app/src/main/jniLibs/arm64-v8a/libdshworkspace.so`、`tools/root-workspace.c`，并清理 `PhoneBackendTest` 中的 `mountOnly` 测试及文档过时引用。
 
 ## 待办 / 需确认项
 
 - [ ] **R8 混淆与资源裁剪真机验证**（`app/build.gradle.kts` 当前保持 `isMinifyEnabled = false` / `isShrinkResources = false`；开启前需在真机上完整验证 JNI、Shizuku、RootService 反射与序列化流程）。
-- [ ] **插件市场精选源地址确认**（`MarketIndex.CURATED_URL` 与 `js/packages/plugin-extensions/boot.js` 中的 `CURATED_INDEX` 仍指向 `jackwener/DSH-Android`，需确认是继续复用上游市场索引还是切回 `mam15mon/dsh-android`）。
-- [ ] **`libdshworkspace.so` 与 `PhoneBackendTest` 挂载测试去留**（主流程已移除 FUSE 挂载死代码，仅 `app/src/androidTest/java/io/github/mam15mon/dsh/nativeextra/PhoneBackendTest.kt` 的 `mountOnly` 仍测试 `libdshworkspace.so`，待决定是否连同 `tools/root-workspace.c` 与该测试一并下线）。
