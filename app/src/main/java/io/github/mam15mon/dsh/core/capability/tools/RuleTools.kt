@@ -99,17 +99,10 @@ class RuleTools @Inject constructor(
 
     private companion object {
         val RULE_DOC = """
-Create an automation. The app requests tool approval before saving.
-RuleSpec: {"name": str, "trigger": T, "extraTriggers": [T... opt OR triggers, max 8 total], "conditions": [C... AND], "action": A, "allowedTools": [tools], "cooldownSeconds": 60, "notifyOnSuccess": true}
-T (pick one, field "type"):
- {"type":"manual"} | {"type":"time","at":"HH:mm","days":[1..7 Mon=1, empty=daily]} | {"type":"time","everyMinutes":n>=15} | {"type":"time","onceAtEpochMs":ms}
- {"type":"wifi","connected":bool,"ssid":opt} | {"type":"bluetooth","connected":bool,"deviceName":opt}
- {"type":"power","connected":bool} | {"type":"battery_low","percent":n} | {"type":"headset","plugged":bool}
- {"type":"screen","event":"on|off|unlock"} | {"type":"notification","packageName":opt,"keyword":opt,"excludeKeyword":opt}
- {"type":"app_opened","packageName":str} | {"type":"geofence","lat":d,"lng":d,"radiusM":200,"enter":bool}
-C: {"type":"time_range","from":"HH:mm","to":"HH:mm"} | {"type":"days","days":[..]} | {"type":"battery","min":n,"max":n} | {"type":"charging","charging":bool} | {"type":"wifi","connected":bool,"ssid":opt} | {"type":"screen","state":"on|off|unlocked|locked"} | {"type":"bluetooth","connected":bool}
-A: {"type":"steps","steps":[{"tool":"sound_mode","args":{"mode":"silent"}}]} (fixed calls, preferred)
- | {"type":"agent","prompt":"task"} (unattended; allowedTools only, no user questions)
-Screen tools wait for unlock; list all needed tools (e.g. app_guide). Returns missing permissions.""".trim()
+Create an automation (user approves before saving).
+RuleSpec: {"name":str,"trigger":T,"extraTriggers":[T..opt OR max8],"conditions":[C..AND],"action":A,"allowedTools":[tools],"cooldownSeconds":60,"notifyOnSuccess":true}
+T (obj with "type":): manual | boot | time(at="HH:mm",days=[1..7],everyMinutes>=15,onceAtEpochMs; pick 1) | wifi(connected,ssid?) | bluetooth(connected,deviceName?) | network(type="wifi|cellular|offline") | power(connected) | battery_low|battery_high(percent) | headset(plugged) | airplane_mode(enabled) | screen(event="on|off|unlock") | app_opened|app_closed(packageName) | geofence(lat,lng,radiusM=200,enter) | notification(packageName?,keyword?,excludeKeyword?) | call(event="ringing|answered|ended|missed",number?) | sms(sender?,keyword?,excludeKeyword?)
+C (obj with "type":): time_range(from="HH:mm",to="HH:mm") | days(days) | battery(min?,max?) | charging(charging) | wifi(connected,ssid?) | screen(state="on|off|unlocked|locked") | bluetooth(connected) | in_call(inCall) | foreground_app(packageName,invert?) | network(type="wifi|cellular|offline") | sound_mode(mode="normal|vibrate|silent|dnd") | headset(plugged)
+A: {"type":"steps","steps":[{"tool":"sound_mode","args":{"mode":"silent"}}]} (no model) | {"type":"agent","prompt":"task"} (allowedTools only)""".trim()
     }
 }

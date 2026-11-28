@@ -53,7 +53,9 @@ class DshAccessibilityService : AccessibilityService() {
         val active = runCatching { windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_APPLICATION && (it.isActive || it.isFocused) } }.getOrNull()
         val activePkg = active?.root?.packageName?.toString()
         if (activePkg != null && activePkg != pkg) return
+        val prev = _foreground.value
         _foreground.value = pkg
+        if (prev != null && prev != pkg) TriggerEvents.appClosed(prev)
         TriggerEvents.appOpened(pkg)
     }
 

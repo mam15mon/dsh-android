@@ -60,6 +60,25 @@ fun validateRule(spec: RuleSpec, knownTools: Set<String>, now: Long = System.cur
             if (it.radiusM !in 50f..100_000f) p += "$prefix.radiusM must be 50..100000 metres (100+ recommended), got ${it.radiusM}"
         }
         is Trigger.AppOpened -> raw.also { if (it.packageName.isBlank()) p += "$prefix.packageName must not be empty" }
+        is Trigger.AppClosed -> raw.let {
+            if (it.packageName.isBlank()) { p += "$prefix.packageName must not be empty"; it }
+            else it.copy(packageName = it.packageName.trim())
+        }
+        is Trigger.Call -> raw.let {
+            if (it.event !in setOf("ringing", "answered", "ended", "missed")) {
+                p += "$prefix.event must be \"ringing\", \"answered\", \"ended\" or \"missed\", got \"${it.event}\""
+            }
+            it.copy(number = it.number?.trim()?.takeIf { n -> n.isNotEmpty() })
+        }
+        is Trigger.Sms -> raw.copy(
+            sender = raw.sender?.trim()?.takeIf { it.isNotEmpty() },
+            keyword = raw.keyword?.trim()?.takeIf { it.isNotEmpty() },
+            excludeKeyword = raw.excludeKeyword?.trim()?.takeIf { it.isNotEmpty() },
+        )
+        is Trigger.BatteryHigh -> raw.also { if (it.percent !in 2..100) p += "$prefix.percent must be 2..100, got ${it.percent}" }
+        is Trigger.Network -> raw.also {
+            if (it.type !in setOf("wifi", "cellular", "offline")) p += "$prefix.type must be \"wifi\", \"cellular\" or \"offline\", got \"${it.type}\""
+        }
         is Trigger.Notification -> raw.copy(
             packageName = raw.packageName?.trim()?.takeIf { it.isNotEmpty() },
             keyword = raw.keyword?.trim()?.takeIf { it.isNotEmpty() },
@@ -84,7 +103,21 @@ fun validateRule(spec: RuleSpec, knownTools: Set<String>, now: Long = System.cur
                     p += "screen condition state must be \"on\", \"off\", \"unlocked\" or \"locked\", got \"${it.state}\""
                 }
             }
-            is Condition.Charging, is Condition.Bluetooth -> c
+            is Condition.ForegroundApp -> {
+                if (c.packageName.isBlank()) { p += "foreground_app condition packageName must not be empty"; c }
+                else c.copy(packageName = c.packageName.trim())
+            }
+            is Condition.Network -> c.also {
+                if (it.type !in setOf("wifi", "cellular", "offline")) {
+                    p += "network condition type must be \"wifi\", \"cellular\" or \"offline\", got \"${it.type}\""
+                }
+            }
+            is Condition.SoundMode -> c.also {
+                if (it.mode !in setOf("normal", "vibrate", "silent", "dnd")) {
+                    p += "sound_mode condition mode must be \"normal\", \"vibrate\", \"silent\" or \"dnd\", got \"${it.mode}\""
+                }
+            }
+            is Condition.Charging, is Condition.Bluetooth, is Condition.InCall, is Condition.Headset -> c
         }
     }
     var allowed = spec.allowedTools.map { it.trim() }.filter { it.isNotEmpty() }

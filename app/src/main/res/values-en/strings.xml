@@ -487,6 +487,9 @@
     <string name="rule_condition_dialog_edit">Edit condition</string>
     <string name="rule_steps_sound_preset">Quick action · ringer mode</string>
     <string name="rule_steps_custom_readonly">Custom fixed steps are preserved; use Edit in chat for advanced parameters.</string>
+    <string name="rule_add_step">Add action</string>
+    <string name="rule_step_dialog_add">Add action</string>
+    <string name="rule_step_dialog_edit">Edit action</string>
     <string name="set_general">General</string>
     <string name="set_model">Model services</string>
     <string name="set_agent">Capabilities</string>

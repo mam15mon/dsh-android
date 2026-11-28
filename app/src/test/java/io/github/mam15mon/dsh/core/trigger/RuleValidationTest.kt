@@ -118,11 +118,44 @@ class RuleValidationTest {
 
         val tooMany = spec.copy(extraTriggers = List(MAX_RULE_TRIGGERS) { Trigger.Manual })
         val badScreen = spec.copy(conditions = listOf(Condition.Screen("sleep")))
-        listOf(tooMany, badScreen).forEach { bad ->
+        val badCall = spec.copy(trigger = Trigger.Call("unknown"))
+        val badBattHigh = spec.copy(trigger = Trigger.BatteryHigh(1))
+        val badNet = spec.copy(trigger = Trigger.Network("5g"))
+        val badSound = spec.copy(conditions = listOf(Condition.SoundMode("loud")))
+        val badFg = spec.copy(conditions = listOf(Condition.ForegroundApp("  ")))
+        listOf(tooMany, badScreen, badCall, badBattHigh, badNet, badSound, badFg).forEach { bad ->
             try {
                 validateRule(bad, tools)
                 fail("accepted invalid multi-trigger/condition $bad")
             } catch (_: RuleSpecException) {}
         }
+
+        val rich = validateRule(
+            RuleSpec(
+                name = "Rich triggers",
+                trigger = Trigger.Call("missed", " 10086 "),
+                extraTriggers = listOf(
+                    Trigger.Sms(" Bank ", " OTP ", " promo "),
+                    Trigger.AppClosed(" com.video "),
+                    Trigger.BatteryHigh(85),
+                    Trigger.Network("offline"),
+                    Trigger.AirplaneMode(false),
+                    Trigger.Boot,
+                ),
+                conditions = listOf(
+                    Condition.InCall(false),
+                    Condition.ForegroundApp(" com.chat ", invert = true),
+                    Condition.Network("cellular"),
+                    Condition.SoundMode("dnd"),
+                    Condition.Headset(true),
+                ),
+                action = RuleAction.Agent("summarize"),
+            ),
+            tools,
+        )
+        assertEquals("10086", (rich.trigger as Trigger.Call).number)
+        assertEquals(Trigger.Sms("Bank", "OTP", "promo"), rich.extraTriggers[0])
+        assertEquals("com.video", (rich.extraTriggers[1] as Trigger.AppClosed).packageName)
+        assertEquals("com.chat", (rich.conditions[1] as Condition.ForegroundApp).packageName)
     }
 }

@@ -51,8 +51,22 @@ sealed interface Trigger {
     data class Notification(val packageName: String? = null, val keyword: String? = null, val excludeKeyword: String? = null) : Trigger
     @Serializable @SerialName("app_opened")
     data class AppOpened(val packageName: String) : Trigger
+    @Serializable @SerialName("app_closed")
+    data class AppClosed(val packageName: String) : Trigger
     @Serializable @SerialName("geofence")
     data class Geofence(val lat: Double, val lng: Double, val radiusM: Float = 200f, val enter: Boolean = true) : Trigger
+    @Serializable @SerialName("call")
+    data class Call(val event: String /* ringing | answered | ended | missed */, val number: String? = null) : Trigger
+    @Serializable @SerialName("sms")
+    data class Sms(val sender: String? = null, val keyword: String? = null, val excludeKeyword: String? = null) : Trigger
+    @Serializable @SerialName("battery_high")
+    data class BatteryHigh(val percent: Int) : Trigger
+    @Serializable @SerialName("network")
+    data class Network(val type: String /* wifi | cellular | offline */) : Trigger
+    @Serializable @SerialName("airplane_mode")
+    data class AirplaneMode(val enabled: Boolean) : Trigger
+    @Serializable @SerialName("boot")
+    data object Boot : Trigger
 }
 
 @Serializable
@@ -71,6 +85,16 @@ sealed interface Condition {
     data class Screen(val state: String /* on | off | unlocked | locked */) : Condition
     @Serializable @SerialName("bluetooth")
     data class Bluetooth(val connected: Boolean) : Condition
+    @Serializable @SerialName("in_call")
+    data class InCall(val inCall: Boolean) : Condition
+    @Serializable @SerialName("foreground_app")
+    data class ForegroundApp(val packageName: String, val invert: Boolean = false) : Condition
+    @Serializable @SerialName("network")
+    data class Network(val type: String /* wifi | cellular | offline */) : Condition
+    @Serializable @SerialName("sound_mode")
+    data class SoundMode(val mode: String /* normal | vibrate | silent | dnd */) : Condition
+    @Serializable @SerialName("headset")
+    data class Headset(val plugged: Boolean) : Condition
 }
 
 @Serializable

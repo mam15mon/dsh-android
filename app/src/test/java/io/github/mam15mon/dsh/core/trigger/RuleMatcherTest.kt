@@ -33,6 +33,17 @@ class RuleMatcherTest {
         assertTrue(RuleMatcher.matches(3, Trigger.Notification("com.chat", "urgent", "spam"), DeviceEvent.Notification("com.chat", "URGENT ping", "hello")))
         assertFalse(RuleMatcher.matches(3, Trigger.Notification("com.chat", "urgent", "spam"), DeviceEvent.Notification("com.chat", "URGENT spam", "hello")))
         assertFalse(RuleMatcher.matches(3, Trigger.Notification("com.chat", "urgent", "spam"), DeviceEvent.Notification("com.other", "URGENT ping", "hello")))
+
+        assertTrue(RuleMatcher.matches(4, Trigger.Call("ringing", "138"), DeviceEvent.Call("ringing", "+8613800138000")))
+        assertFalse(RuleMatcher.matches(4, Trigger.Call("ringing", "138"), DeviceEvent.Call("ringing", "10086")))
+        assertTrue(RuleMatcher.matches(5, Trigger.Sms("10086", "流量", "推广"), DeviceEvent.Sms("10086", "本月剩余流量 10GB")))
+        assertFalse(RuleMatcher.matches(5, Trigger.Sms("10086", "流量", "推广"), DeviceEvent.Sms("10086", "流量推广活动")))
+        assertTrue(RuleMatcher.matches(6, Trigger.AppClosed("com.video"), DeviceEvent.AppClosed("com.video")))
+        assertTrue(RuleMatcher.matches(7, Trigger.BatteryHigh(80), DeviceEvent.Battery(80, 79, true)))
+        assertFalse(RuleMatcher.matches(7, Trigger.BatteryHigh(80), DeviceEvent.Battery(80, 79, false)))
+        assertTrue(RuleMatcher.matches(8, Trigger.Network("cellular"), DeviceEvent.Network("cellular")))
+        assertTrue(RuleMatcher.matches(9, Trigger.AirplaneMode(true), DeviceEvent.AirplaneMode(true)))
+        assertTrue(RuleMatcher.matches(10, Trigger.Boot, DeviceEvent.Boot))
     }
 
     @Test fun matchRuleSupportsOrExtraTriggersAndIndexedAlarmsGeofences() {
@@ -101,6 +112,23 @@ class RuleMatcherTest {
 
         assertTrue(RuleMatcher.holds(Condition.Bluetooth(true), LocalTime.NOON, monday, officeUnlocked))
         assertFalse(RuleMatcher.holds(Condition.Bluetooth(true), LocalTime.NOON, monday, offlineLocked))
+
+        val richState = officeUnlocked.copy(
+            inCall = true,
+            foregroundPackage = "com.game",
+            networkType = "wifi",
+            soundMode = "vibrate",
+            dndActive = true,
+            headsetPlugged = true,
+        )
+        assertTrue(RuleMatcher.holds(Condition.InCall(true), LocalTime.NOON, monday, richState))
+        assertFalse(RuleMatcher.holds(Condition.InCall(false), LocalTime.NOON, monday, richState))
+        assertTrue(RuleMatcher.holds(Condition.ForegroundApp("com.game"), LocalTime.NOON, monday, richState))
+        assertFalse(RuleMatcher.holds(Condition.ForegroundApp("com.game", invert = true), LocalTime.NOON, monday, richState))
+        assertTrue(RuleMatcher.holds(Condition.Network("wifi"), LocalTime.NOON, monday, richState))
+        assertTrue(RuleMatcher.holds(Condition.SoundMode("vibrate"), LocalTime.NOON, monday, richState))
+        assertTrue(RuleMatcher.holds(Condition.SoundMode("dnd"), LocalTime.NOON, monday, richState))
+        assertTrue(RuleMatcher.holds(Condition.Headset(true), LocalTime.NOON, monday, richState))
     }
 
     @Test fun nextFireComputesSingleAndEarliestMultiTimeTrigger() {
@@ -141,10 +169,11 @@ class RuleMatcherTest {
             RuleSpec("m", Trigger.Manual, action = stepAction),
             RuleSpec("n", Trigger.Notification(), action = stepAction),
         )))
-        val expected = RuleMatcher.FLAG_WIFI or RuleMatcher.FLAG_POWER or RuleMatcher.FLAG_HEADSET
+        val expected = RuleMatcher.FLAG_WIFI or RuleMatcher.FLAG_POWER or RuleMatcher.FLAG_HEADSET or
+            RuleMatcher.FLAG_CALL or RuleMatcher.FLAG_NETWORK or RuleMatcher.FLAG_AIRPLANE or RuleMatcher.FLAG_BATTERY
         assertEquals(expected, RuleMatcher.monitorMask(listOf(
-            RuleSpec("w", Trigger.Wifi(true), extraTriggers = listOf(Trigger.Headset(true)), action = stepAction),
-            RuleSpec("p", Trigger.Power(false), action = stepAction),
+            RuleSpec("w", Trigger.Wifi(true), extraTriggers = listOf(Trigger.Headset(true), Trigger.Call("ringing")), action = stepAction),
+            RuleSpec("p", Trigger.Power(false), extraTriggers = listOf(Trigger.Network("wifi"), Trigger.AirplaneMode(true), Trigger.BatteryHigh(80)), action = stepAction),
         )))
     }
 

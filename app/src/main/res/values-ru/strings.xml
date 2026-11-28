@@ -484,6 +484,9 @@
     <string name="rule_condition_dialog_edit">Изменить условие</string>
     <string name="rule_steps_sound_preset">Быстрое действие · режим звука</string>
     <string name="rule_steps_custom_readonly">Пользовательские шаги сохраняются; для сложной правки используй чат.</string>
+    <string name="rule_add_step">Добавить действие</string>
+    <string name="rule_step_dialog_add">Добавить действие</string>
+    <string name="rule_step_dialog_edit">Изменить действие</string>
     <string name="set_general">Общие</string>
     <string name="set_model">Модели</string>
     <string name="set_agent">Возможности</string>

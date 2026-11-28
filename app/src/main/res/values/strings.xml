@@ -487,6 +487,9 @@
     <string name="rule_condition_dialog_edit">编辑条件</string>
     <string name="rule_steps_sound_preset">快捷动作 · 手机铃声模式</string>
     <string name="rule_steps_custom_readonly">当前包含自定义固定步骤，已保留原参数；如需深度调整请点详情页「对话修改」。</string>
+    <string name="rule_add_step">添加固定动作</string>
+    <string name="rule_step_dialog_add">添加动作</string>
+    <string name="rule_step_dialog_edit">编辑动作</string>
     <string name="set_general">通用</string>
     <string name="set_model">模型服务</string>
     <string name="set_agent">能力</string>

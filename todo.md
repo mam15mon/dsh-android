@@ -57,8 +57,12 @@
 
 - [x] **独立全屏可视化规则编辑器（`RuleEditorScreen`）**
   - 新增 `RuleEditorRoute` 与 `RuleEditorScreen.kt`，支持从零手动创建、详情页进入全屏编辑以及从 5 个结构化模板直接载入编辑器。
-  - 支持可视化逐条添加/修改/删除多触发器（OR，含 12 种触发器与星期胶囊点选）与状态条件（AND，全部 7 种条件）、直接编辑智能体 Prompt/工具权限/专用模型/Root 工作项目、切换常用铃声固定动作、设置防抖冷却与成功通知开关。
+  - 支持可视化逐条添加/修改/删除多触发器（OR，含星期胶囊点选）与状态条件（AND）、直接编辑智能体 Prompt/工具权限/专用模型/Root 工作项目、设置防抖冷却与成功通知开关。
   - 更新 `BackNavigationTest` 覆盖新编辑页返回栈路径。
+
+- [x] **规则引擎全面补全与多步固定动作流水线**
+  - 新增 7 种触发器（`call` 来电响铃/接听/挂断/未接、`sms` 收到短信、`app_closed` 退出应用、`battery_high` 高电量、`network` 网络切换、`airplane_mode` 飞行模式、`boot` 开机完成）与 5 种状态条件（`in_call`、`foreground_app`、`network`、`sound_mode`、`headset`），补齐 `READ_PHONE_STATE`/`RECEIVE_SMS` 权限声明与 `PermissionCatalog` 映射。
+  - `RuleEditorScreen` 固定动作升级为可增删改顺序的多步流水线（支持 10 种免 token 本地工具：`sound_mode`、`volume_set`、`dnd_set`、`brightness_set`、`flashlight`、`wifi_toggle`、`bluetooth_toggle`、`mobile_data_toggle`、`media_control`、`app_launch`），并修正模板里错误的 `read_notifications` 工具名为 `notification_list`。
 
 ## 待办 / 需确认项
 

@@ -19,7 +19,13 @@ sealed interface DeviceEvent {
     data class Screen(val event: String) : DeviceEvent
     data class Notification(val packageName: String, val title: String, val text: String) : DeviceEvent
     data class AppOpened(val packageName: String) : DeviceEvent
+    data class AppClosed(val packageName: String) : DeviceEvent
     data class Geofence(val ruleId: Long, val entering: Boolean, val triggerIndex: Int = 0) : DeviceEvent
+    data class Call(val event: String, val number: String?) : DeviceEvent
+    data class Sms(val sender: String, val body: String) : DeviceEvent
+    data class Network(val type: String) : DeviceEvent
+    data class AirplaneMode(val enabled: Boolean) : DeviceEvent
+    data object Boot : DeviceEvent
 }
 
 @EntryPoint
@@ -34,5 +40,6 @@ object TriggerEvents {
 
     fun emit(event: DeviceEvent) { runCatching { hub?.onEvent(event) } }
     fun appOpened(pkg: String) = emit(DeviceEvent.AppOpened(pkg))
+    fun appClosed(pkg: String) = emit(DeviceEvent.AppClosed(pkg))
     fun notificationPosted(pkg: String, title: String, text: String) = emit(DeviceEvent.Notification(pkg, title, text))
 }

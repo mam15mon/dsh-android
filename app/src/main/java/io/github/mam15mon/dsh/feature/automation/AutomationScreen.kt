@@ -88,6 +88,10 @@ import io.github.mam15mon.dsh.core.trigger.TriggerHub
 import io.github.mam15mon.dsh.feature.settings.isZh
 import io.github.mam15mon.dsh.nativeextra.NativeRoot
 import io.github.mam15mon.dsh.nativeextra.RootProject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
@@ -439,10 +443,13 @@ private fun RuleCard(
 internal fun triggerIcon(t: Trigger?): Int = when (t) {
     is Trigger.Time -> R.drawable.dsw_alarm_clock_outline
     is Trigger.Manual -> R.drawable.dsw_play_outline
-    is Trigger.Notification -> R.drawable.dsw_info_outline
-    is Trigger.AppOpened -> R.drawable.dsw_apps_add_outline
+    is Trigger.Notification, is Trigger.Sms -> R.drawable.dsw_info_outline
+    is Trigger.AppOpened, is Trigger.AppClosed -> R.drawable.dsw_apps_add_outline
     is Trigger.Geofence -> R.drawable.dsw_globe_outline
-    is Trigger.BatteryLow, is Trigger.Power -> R.drawable.dsw_gauge_outline
+    is Trigger.BatteryLow, is Trigger.BatteryHigh, is Trigger.Power -> R.drawable.dsw_gauge_outline
+    is Trigger.Call -> R.drawable.dsw_microphone_outline
+    is Trigger.Network, is Trigger.Wifi -> R.drawable.dsw_globe_outline
+    is Trigger.Boot, is Trigger.AirplaneMode -> R.drawable.dsw_settings_outline
     else -> R.drawable.dsw_clock_outline
 }
 
@@ -580,7 +587,7 @@ fun RuleDetailScreen(
                         }
                         is RuleAction.Steps -> {
                             Tag(stringResource(R.string.rule_fixed_steps), Tone.Success)
-                            a.steps.forEachIndexed { i, st -> Text("${i + 1}. ${st.tool} ${st.args}", style = DshType.mono12, color = c.labelSecondary) }
+                            a.steps.forEachIndexed { i, st -> Text("${i + 1}. ${describeStep(st, zh)}", style = DshType.s14, color = c.labelSecondary) }
                         }
                         null -> Text("—")
                     }
@@ -681,7 +688,30 @@ fun describeTrigger(t: Trigger, zh: Boolean): String = when (t) {
         t.excludeKeyword?.let { if (zh) "排除 $it" else "except $it" },
     ).joinToString(" · ")
     is Trigger.AppOpened -> (if (zh) "打开 " else "Opened ") + t.packageName
+    is Trigger.AppClosed -> (if (zh) "退出 " else "Closed ") + t.packageName
     is Trigger.Geofence -> (if (t.enter) (if (zh) "到达" else "Arrive") else (if (zh) "离开" else "Leave")) + " ${"%.4f".format(t.lat)},${"%.4f".format(t.lng)}"
+    is Trigger.Call -> {
+        val label = when (t.event) {
+            "ringing" -> if (zh) "来电响铃" else "Incoming call"
+            "answered" -> if (zh) "接通电话" else "Call answered"
+            "missed" -> if (zh) "未接来电" else "Missed call"
+            else -> if (zh) "挂断电话" else "Call ended"
+        }
+        label + (t.number?.let { " · $it" } ?: "")
+    }
+    is Trigger.Sms -> (if (zh) "收到短信 " else "SMS ") + listOfNotNull(
+        t.sender,
+        t.keyword,
+        t.excludeKeyword?.let { if (zh) "排除 $it" else "except $it" },
+    ).joinToString(" · ").ifEmpty { if (zh) "任意短信" else "any" }
+    is Trigger.BatteryHigh -> (if (zh) "电量充到 " else "Battery charged to ") + "${t.percent}%"
+    is Trigger.Network -> when (t.type) {
+        "wifi" -> if (zh) "网络切换为 Wi‑Fi" else "Network switched to Wi‑Fi"
+        "cellular" -> if (zh) "网络切换为移动流量" else "Network switched to cellular"
+        else -> if (zh) "网络已断开" else "Network offline"
+    }
+    is Trigger.AirplaneMode -> if (t.enabled) (if (zh) "开启飞行模式" else "Airplane mode on") else (if (zh) "关闭飞行模式" else "Airplane mode off")
+    is Trigger.Boot -> if (zh) "开机启动完成" else "Device booted"
 }
 
 fun describeCondition(c: Condition, zh: Boolean): String = when (c) {
@@ -697,6 +727,92 @@ fun describeCondition(c: Condition, zh: Boolean): String = when (c) {
         else -> if (zh) "未解锁" else "Locked"
     }
     is Condition.Bluetooth -> if (c.connected) (if (zh) "蓝牙已连接" else "Bluetooth connected") else (if (zh) "蓝牙未连接" else "Bluetooth disconnected")
+    is Condition.InCall -> if (c.inCall) (if (zh) "通话中" else "In a call") else (if (zh) "未在通话中" else "Not in a call")
+    is Condition.ForegroundApp -> (if (c.invert) (if (zh) "当前不在 " else "Not in ") else (if (zh) "当前位于 " else "In ")) + c.packageName
+    is Condition.Network -> when (c.type) {
+        "wifi" -> if (zh) "当前为 Wi‑Fi" else "On Wi‑Fi"
+        "cellular" -> if (zh) "当前为移动流量" else "On cellular"
+        else -> if (zh) "当前无网络" else "Offline"
+    }
+    is Condition.SoundMode -> when (c.mode) {
+        "silent" -> if (zh) "当前为静音" else "Silent mode"
+        "vibrate" -> if (zh) "当前为震动" else "Vibrate mode"
+        "dnd" -> if (zh) "当前已开启勿扰" else "Do Not Disturb on"
+        else -> if (zh) "当前为正常响铃" else "Normal ringer"
+    }
+    is Condition.Headset -> if (c.plugged) (if (zh) "已连接耳机" else "Headset connected") else (if (zh) "未连接耳机" else "Headset disconnected")
+}
+
+internal fun describeStep(step: io.github.mam15mon.dsh.core.model.Step, zh: Boolean): String {
+    val args = step.args
+    return when (step.tool) {
+        "sound_mode" -> {
+            val mode = when (args["mode"]?.jsonPrimitive?.contentOrNull) {
+                "silent" -> if (zh) "静音" else "Silent"
+                "vibrate" -> if (zh) "震动" else "Vibrate"
+                else -> if (zh) "正常响铃" else "Normal"
+            }
+            if (zh) "铃声模式：$mode" else "Ringer: $mode"
+        }
+        "volume_set" -> {
+            val stream = when (args["stream"]?.jsonPrimitive?.contentOrNull) {
+                "music" -> if (zh) "媒体" else "Media"
+                "ring" -> if (zh) "铃声" else "Ring"
+                "alarm" -> if (zh) "闹钟" else "Alarm"
+                "notification" -> if (zh) "通知" else "Notification"
+                "call" -> if (zh) "通话" else "Call"
+                else -> if (zh) "媒体" else "Media"
+            }
+            val pct = args["percent"]?.jsonPrimitive?.intOrNull ?: 50
+            if (zh) "设置${stream}音量：$pct%" else "Set $stream volume to $pct%"
+        }
+        "dnd_set" -> {
+            val on = args["on"]?.jsonPrimitive?.booleanOrNull == true
+            if (zh) (if (on) "开启勿扰模式" else "关闭勿扰模式") else "Do Not Disturb ${if (on) "on" else "off"}"
+        }
+        "brightness_set" -> {
+            val auto = args["auto"]?.jsonPrimitive?.booleanOrNull == true
+            val pct = args["percent"]?.jsonPrimitive?.intOrNull
+            when {
+                auto -> if (zh) "开启自动亮度" else "Auto brightness"
+                pct != null -> if (zh) "设置屏幕亮度：$pct%" else "Brightness $pct%"
+                else -> if (zh) "调节屏幕亮度" else "Set brightness"
+            }
+        }
+        "flashlight" -> {
+            val on = args["on"]?.jsonPrimitive?.booleanOrNull == true
+            if (zh) (if (on) "打开手电筒" else "关闭手电筒") else "Flashlight ${if (on) "on" else "off"}"
+        }
+        "wifi_toggle" -> {
+            val on = args["on"]?.jsonPrimitive?.booleanOrNull == true
+            if (zh) (if (on) "打开 Wi‑Fi" else "关闭 Wi‑Fi") else "Wi‑Fi ${if (on) "on" else "off"}"
+        }
+        "bluetooth_toggle" -> {
+            val on = args["on"]?.jsonPrimitive?.booleanOrNull == true
+            if (zh) (if (on) "打开蓝牙" else "关闭蓝牙") else "Bluetooth ${if (on) "on" else "off"}"
+        }
+        "mobile_data_toggle" -> {
+            val on = args["on"]?.jsonPrimitive?.booleanOrNull == true
+            if (zh) (if (on) "打开移动数据" else "关闭移动数据") else "Mobile data ${if (on) "on" else "off"}"
+        }
+        "media_control" -> {
+            val act = when (args["action"]?.jsonPrimitive?.contentOrNull) {
+                "play" -> if (zh) "播放" else "Play"
+                "pause" -> if (zh) "暂停" else "Pause"
+                "toggle" -> if (zh) "播放/暂停" else "Play/Pause"
+                "next" -> if (zh) "下一首" else "Next"
+                "previous" -> if (zh) "上一首" else "Previous"
+                "stop" -> if (zh) "停止" else "Stop"
+                else -> args["action"]?.jsonPrimitive?.contentOrNull ?: "status"
+            }
+            if (zh) "媒体控制：$act" else "Media: $act"
+        }
+        "app_launch" -> {
+            val pkg = args["package"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            if (zh) "打开应用：$pkg" else "Launch $pkg"
+        }
+        else -> "${step.tool} ${step.args}"
+    }
 }
 
 /** 1 = Monday … 7 = Sunday (ISO), as 一…日 / Mon…Sun. */

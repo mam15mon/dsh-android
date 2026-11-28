@@ -64,8 +64,10 @@ import io.github.mam15mon.dsh.core.provider.DEEPSEEK_MODELS
 import io.github.mam15mon.dsh.core.trigger.MAX_RULE_TRIGGERS
 import io.github.mam15mon.dsh.feature.conversation.ToolPresentation
 import io.github.mam15mon.dsh.feature.settings.isZh
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
@@ -93,13 +95,13 @@ internal val RULE_TEMPLATES: List<RuleTemplate> = listOf(
             name = "早间重要通知摘要",
             trigger = Trigger.Time(at = "08:00"),
             action = RuleAction.Agent("读取未读通知，过滤推广广告，按优先级整理重要消息并生成简短汇报。"),
-            allowedTools = listOf("read_notifications"),
+            allowedTools = listOf("notification_list"),
         ),
         specEn = RuleSpec(
             name = "Morning notification brief",
             trigger = Trigger.Time(at = "08:00"),
             action = RuleAction.Agent("Read unread notifications, skip promos, and write a concise prioritized brief."),
-            allowedTools = listOf("read_notifications"),
+            allowedTools = listOf("notification_list"),
         ),
     ),
     RuleTemplate(
@@ -156,14 +158,14 @@ internal val RULE_TEMPLATES: List<RuleTemplate> = listOf(
             name = "今日待办整理",
             trigger = Trigger.Manual,
             action = RuleAction.Agent("读取今天收到的重要通知，提取需要跟进的待办和回复建议，列出清晰清单。"),
-            allowedTools = listOf("read_notifications"),
+            allowedTools = listOf("notification_list"),
             cooldownSeconds = 0,
         ),
         specEn = RuleSpec(
             name = "Daily todo recap",
             trigger = Trigger.Manual,
             action = RuleAction.Agent("Read today's notifications and produce a prioritized action checklist."),
-            allowedTools = listOf("read_notifications"),
+            allowedTools = listOf("notification_list"),
             cooldownSeconds = 0,
         ),
     ),
@@ -265,6 +267,8 @@ fun RuleEditorScreen(
     var addingTrigger by remember { mutableStateOf(false) }
     var editConditionIdx by remember { mutableStateOf<Int?>(null) }
     var addingCondition by remember { mutableStateOf(false) }
+    var editStepIdx by remember { mutableStateOf<Int?>(null) }
+    var addingStep by remember { mutableStateOf(false) }
     var pickingTools by remember { mutableStateOf(false) }
 
     val allManual = triggers.all { it is Trigger.Manual }
@@ -461,26 +465,30 @@ fun RuleEditorScreen(
                             }
                         }
                     } else {
-                        val isSingleSoundMode = steps.size == 1 && steps[0].tool == "sound_mode"
-                        if (isSingleSoundMode) {
-                            val curMode = steps[0].args["mode"]?.jsonPrimitive?.contentOrNull ?: "silent"
-                            Text(stringResource(R.string.rule_steps_sound_preset), style = DshType.xs13m, color = c.labelSecondary)
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                listOf(
-                                    "silent" to (if (zh) "静音" else "Silent"),
-                                    "vibrate" to (if (zh) "震动" else "Vibrate"),
-                                    "normal" to (if (zh) "正常响铃" else "Normal"),
-                                ).forEach { (modeVal, label) ->
-                                    FilterPill(label, curMode == modeVal) {
-                                        steps = listOf(Step("sound_mode", buildJsonObject { put("mode", modeVal) }))
-                                    }
-                                }
-                            }
-                        } else {
+                        Column(Modifier.fillMaxWidth()) {
                             steps.forEachIndexed { idx, st ->
-                                Text("${idx + 1}. ${st.tool} ${st.args}", style = DshType.mono12, color = c.labelSecondary)
+                                SettingsRow(
+                                    title = "${idx + 1}. ${describeStep(st, zh)}",
+                                    divider = idx > 0,
+                                    onClick = { editStepIdx = idx },
+                                    trailing = if (steps.size > 1) ({
+                                        IconBtn(
+                                            res = R.drawable.dsw_trash_outline,
+                                            onClick = { steps = steps.filterIndexed { i, _ -> i != idx } },
+                                            size = 32.dp,
+                                            iconSize = 15.dp,
+                                            tint = c.labelTertiary,
+                                        )
+                                    }) else null,
+                                )
                             }
-                            Text(stringResource(R.string.rule_steps_custom_readonly), style = DshType.xxs12, color = c.labelTertiary)
+                            SettingsRow(
+                                title = stringResource(R.string.rule_add_step),
+                                titleColor = c.link,
+                                divider = true,
+                                onClick = { addingStep = true },
+                                leading = { DIcon(R.drawable.dsw_plus_outline, size = 16.dp, tint = c.link) },
+                            )
                         }
                     }
                 }
@@ -539,6 +547,24 @@ fun RuleEditorScreen(
         )
     }
 
+    if (addingStep || editStepIdx != null) {
+        val current = editStepIdx?.let { steps.getOrNull(it) }
+        StepEditDialog(
+            initial = current,
+            zh = zh,
+            onDismiss = { addingStep = false; editStepIdx = null },
+            onConfirm = { built ->
+                steps = if (editStepIdx != null) {
+                    steps.mapIndexed { idx, old -> if (idx == editStepIdx) built else old }
+                } else {
+                    steps + built
+                }
+                addingStep = false
+                editStepIdx = null
+            },
+        )
+    }
+
     if (pickingTools) {
         ToolPickerDialog(
             initial = allowedTools,
@@ -554,20 +580,30 @@ fun RuleEditorScreen(
     }
 }
 
-private enum class TriggerKind { TimeAt, TimeEvery, Manual, Wifi, Bluetooth, Power, BatteryLow, Headset, Screen, Notification, AppOpened, Geofence }
+private enum class TriggerKind {
+    TimeAt, TimeEvery, Manual, Call, Sms, Wifi, Bluetooth, Network, Power, BatteryLow, BatteryHigh,
+    Headset, Screen, AirplaneMode, Notification, AppOpened, AppClosed, Geofence, Boot,
+}
 
 private fun kindOf(t: Trigger): TriggerKind = when (t) {
     is Trigger.Time -> if (t.everyMinutes != null) TriggerKind.TimeEvery else TriggerKind.TimeAt
     is Trigger.Manual -> TriggerKind.Manual
+    is Trigger.Call -> TriggerKind.Call
+    is Trigger.Sms -> TriggerKind.Sms
     is Trigger.Wifi -> TriggerKind.Wifi
     is Trigger.Bluetooth -> TriggerKind.Bluetooth
+    is Trigger.Network -> TriggerKind.Network
     is Trigger.Power -> TriggerKind.Power
     is Trigger.BatteryLow -> TriggerKind.BatteryLow
+    is Trigger.BatteryHigh -> TriggerKind.BatteryHigh
     is Trigger.Headset -> TriggerKind.Headset
     is Trigger.Screen -> TriggerKind.Screen
+    is Trigger.AirplaneMode -> TriggerKind.AirplaneMode
     is Trigger.Notification -> TriggerKind.Notification
     is Trigger.AppOpened -> TriggerKind.AppOpened
+    is Trigger.AppClosed -> TriggerKind.AppClosed
     is Trigger.Geofence -> TriggerKind.Geofence
+    is Trigger.Boot -> TriggerKind.Boot
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -583,18 +619,28 @@ private fun TriggerEditDialog(
     var at by remember(initial) { mutableStateOf((initial as? Trigger.Time)?.at ?: "08:00") }
     var days by remember(initial) { mutableStateOf((initial as? Trigger.Time)?.days?.toSet() ?: emptySet()) }
     var everyText by remember(initial) { mutableStateOf((initial as? Trigger.Time)?.everyMinutes?.toString() ?: "60") }
+    var callEvent by remember(initial) { mutableStateOf((initial as? Trigger.Call)?.event ?: "ringing") }
+    var callNumber by remember(initial) { mutableStateOf((initial as? Trigger.Call)?.number.orEmpty()) }
+    var smsSender by remember(initial) { mutableStateOf((initial as? Trigger.Sms)?.sender.orEmpty()) }
+    var smsKey by remember(initial) { mutableStateOf((initial as? Trigger.Sms)?.keyword.orEmpty()) }
+    var smsEx by remember(initial) { mutableStateOf((initial as? Trigger.Sms)?.excludeKeyword.orEmpty()) }
     var wifiConn by remember(initial) { mutableStateOf((initial as? Trigger.Wifi)?.connected ?: true) }
     var wifiSsid by remember(initial) { mutableStateOf((initial as? Trigger.Wifi)?.ssid.orEmpty()) }
     var btConn by remember(initial) { mutableStateOf((initial as? Trigger.Bluetooth)?.connected ?: true) }
     var btName by remember(initial) { mutableStateOf((initial as? Trigger.Bluetooth)?.deviceName.orEmpty()) }
+    var netType by remember(initial) { mutableStateOf((initial as? Trigger.Network)?.type ?: "wifi") }
     var powerConn by remember(initial) { mutableStateOf((initial as? Trigger.Power)?.connected ?: true) }
-    var battText by remember(initial) { mutableStateOf((initial as? Trigger.BatteryLow)?.percent?.toString() ?: "20") }
+    var battLowText by remember(initial) { mutableStateOf((initial as? Trigger.BatteryLow)?.percent?.toString() ?: "20") }
+    var battHighText by remember(initial) { mutableStateOf((initial as? Trigger.BatteryHigh)?.percent?.toString() ?: "80") }
     var headsetPlug by remember(initial) { mutableStateOf((initial as? Trigger.Headset)?.plugged ?: true) }
     var screenEv by remember(initial) { mutableStateOf((initial as? Trigger.Screen)?.event ?: "unlock") }
+    var airplaneOn by remember(initial) { mutableStateOf((initial as? Trigger.AirplaneMode)?.enabled ?: true) }
     var notifPkg by remember(initial) { mutableStateOf((initial as? Trigger.Notification)?.packageName.orEmpty()) }
     var notifKey by remember(initial) { mutableStateOf((initial as? Trigger.Notification)?.keyword.orEmpty()) }
     var notifEx by remember(initial) { mutableStateOf((initial as? Trigger.Notification)?.excludeKeyword.orEmpty()) }
-    var appPkg by remember(initial) { mutableStateOf((initial as? Trigger.AppOpened)?.packageName.orEmpty()) }
+    var appPkg by remember(initial) {
+        mutableStateOf((initial as? Trigger.AppOpened)?.packageName ?: (initial as? Trigger.AppClosed)?.packageName.orEmpty())
+    }
     var geoLat by remember(initial) { mutableStateOf((initial as? Trigger.Geofence)?.lat?.toString() ?: "") }
     var geoLng by remember(initial) { mutableStateOf((initial as? Trigger.Geofence)?.lng?.toString() ?: "") }
     var geoRad by remember(initial) { mutableStateOf((initial as? Trigger.Geofence)?.radiusM?.toInt()?.toString() ?: "200") }
@@ -619,17 +665,32 @@ private fun TriggerEditDialog(
                         } else Trigger.Time(everyMinutes = m)
                     }
                     TriggerKind.Manual -> Trigger.Manual
+                    TriggerKind.Call -> Trigger.Call(callEvent, callNumber.trim().takeIf { it.isNotEmpty() })
+                    TriggerKind.Sms -> Trigger.Sms(
+                        smsSender.trim().takeIf { it.isNotEmpty() },
+                        smsKey.trim().takeIf { it.isNotEmpty() },
+                        smsEx.trim().takeIf { it.isNotEmpty() },
+                    )
                     TriggerKind.Wifi -> Trigger.Wifi(wifiConn, wifiSsid.trim().takeIf { it.isNotEmpty() })
                     TriggerKind.Bluetooth -> Trigger.Bluetooth(btConn, btName.trim().takeIf { it.isNotEmpty() })
+                    TriggerKind.Network -> Trigger.Network(netType)
                     TriggerKind.Power -> Trigger.Power(powerConn)
                     TriggerKind.BatteryLow -> {
-                        val p = battText.trim().toIntOrNull()
+                        val p = battLowText.trim().toIntOrNull()
                         if (p == null || p !in 1..99) {
                             err = if (zh) "电量需在 1–99 之间" else "Percent must be 1–99"; null
                         } else Trigger.BatteryLow(p)
                     }
+                    TriggerKind.BatteryHigh -> {
+                        val p = battHighText.trim().toIntOrNull()
+                        if (p == null || p !in 2..100) {
+                            err = if (zh) "电量需在 2–100 之间" else "Percent must be 2–100"; null
+                        } else Trigger.BatteryHigh(p)
+                    }
                     TriggerKind.Headset -> Trigger.Headset(headsetPlug)
                     TriggerKind.Screen -> Trigger.Screen(screenEv)
+                    TriggerKind.AirplaneMode -> Trigger.AirplaneMode(airplaneOn)
+                    TriggerKind.Boot -> Trigger.Boot
                     TriggerKind.Notification -> Trigger.Notification(
                         notifPkg.trim().takeIf { it.isNotEmpty() },
                         notifKey.trim().takeIf { it.isNotEmpty() },
@@ -640,6 +701,12 @@ private fun TriggerEditDialog(
                         if (p.isEmpty()) {
                             err = if (zh) "请填写应用包名" else "Package name required"; null
                         } else Trigger.AppOpened(p)
+                    }
+                    TriggerKind.AppClosed -> {
+                        val p = appPkg.trim()
+                        if (p.isEmpty()) {
+                            err = if (zh) "请填写应用包名" else "Package name required"; null
+                        } else Trigger.AppClosed(p)
                     }
                     TriggerKind.Geofence -> {
                         val la = geoLat.trim().toDoubleOrNull()
@@ -654,21 +721,28 @@ private fun TriggerEditDialog(
             }, size = BtnSize.Sm)
         },
     ) {
-        Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf(
                     TriggerKind.TimeAt to (if (zh) "定时" else "Time"),
                     TriggerKind.TimeEvery to (if (zh) "间隔" else "Interval"),
                     TriggerKind.Manual to (if (zh) "手动" else "Manual"),
-                    TriggerKind.Wifi to "Wi‑Fi",
-                    TriggerKind.Bluetooth to (if (zh) "蓝牙" else "Bluetooth"),
-                    TriggerKind.Power to (if (zh) "充电" else "Power"),
-                    TriggerKind.BatteryLow to (if (zh) "低电量" else "Low battery"),
-                    TriggerKind.Headset to (if (zh) "耳机" else "Headset"),
-                    TriggerKind.Screen to (if (zh) "屏幕" else "Screen"),
+                    TriggerKind.Call to (if (zh) "来电/通话" else "Call"),
+                    TriggerKind.Sms to (if (zh) "短信" else "SMS"),
                     TriggerKind.Notification to (if (zh) "通知" else "Notification"),
                     TriggerKind.AppOpened to (if (zh) "打开应用" else "App opened"),
+                    TriggerKind.AppClosed to (if (zh) "退出应用" else "App closed"),
+                    TriggerKind.Wifi to "Wi‑Fi",
+                    TriggerKind.Bluetooth to (if (zh) "蓝牙" else "Bluetooth"),
+                    TriggerKind.Network to (if (zh) "网络切换" else "Network"),
+                    TriggerKind.Power to (if (zh) "充电" else "Power"),
+                    TriggerKind.BatteryLow to (if (zh) "低电量" else "Low battery"),
+                    TriggerKind.BatteryHigh to (if (zh) "高电量" else "High battery"),
+                    TriggerKind.Headset to (if (zh) "耳机" else "Headset"),
+                    TriggerKind.Screen to (if (zh) "屏幕" else "Screen"),
+                    TriggerKind.AirplaneMode to (if (zh) "飞行模式" else "Airplane"),
                     TriggerKind.Geofence to (if (zh) "地点围栏" else "Geofence"),
+                    TriggerKind.Boot to (if (zh) "开机" else "Boot"),
                 ).forEach { (k, label) ->
                     FilterPill(label, kind == k) { kind = k; err = null }
                 }
@@ -689,6 +763,24 @@ private fun TriggerEditDialog(
                     if (zh) "仅通过列表或详情页按钮手动一键触发。" else "Runs only when you tap Run manually.",
                     style = DshType.xs13, color = c.labelTertiary,
                 )
+                TriggerKind.Call -> {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf(
+                            "ringing" to (if (zh) "来电响铃" else "Ringing"),
+                            "answered" to (if (zh) "已接听" else "Answered"),
+                            "missed" to (if (zh) "未接来电" else "Missed"),
+                            "ended" to (if (zh) "已挂断" else "Ended"),
+                        ).forEach { (ev, label) ->
+                            FilterPill(label, callEvent == ev) { callEvent = ev }
+                        }
+                    }
+                    DInput(callNumber, { callNumber = it }, placeholder = if (zh) "指定号码片段（留空匹配所有来电）" else "Number filter (optional)", minHeight = 36.dp)
+                }
+                TriggerKind.Sms -> {
+                    DInput(smsSender, { smsSender = it }, placeholder = if (zh) "发件人号码（留空不限）" else "Sender (optional)", minHeight = 36.dp)
+                    DInput(smsKey, { smsKey = it }, placeholder = if (zh) "短信包含关键词（可选）" else "Keyword (optional)", minHeight = 36.dp)
+                    DInput(smsEx, { smsEx = it }, placeholder = if (zh) "排除关键词（可选）" else "Exclude keyword (optional)", minHeight = 36.dp)
+                }
                 TriggerKind.Wifi -> {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterPill(if (zh) "连上 Wi‑Fi" else "Connected", wifiConn) { wifiConn = true }
@@ -703,11 +795,17 @@ private fun TriggerEditDialog(
                     }
                     DInput(btName, { btName = it }, placeholder = if (zh) "设备名称关键字（留空不限）" else "Device name (optional)", minHeight = 36.dp)
                 }
+                TriggerKind.Network -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterPill("Wi‑Fi", netType == "wifi") { netType = "wifi" }
+                    FilterPill(if (zh) "移动流量" else "Cellular", netType == "cellular") { netType = "cellular" }
+                    FilterPill(if (zh) "断网" else "Offline", netType == "offline") { netType = "offline" }
+                }
                 TriggerKind.Power -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterPill(if (zh) "开始充电" else "Plugged in", powerConn) { powerConn = true }
                     FilterPill(if (zh) "拔掉充电器" else "Unplugged", !powerConn) { powerConn = false }
                 }
-                TriggerKind.BatteryLow -> DInput(battText, { battText = it }, keyboardType = KeyboardType.Number, placeholder = "20", minHeight = 36.dp)
+                TriggerKind.BatteryLow -> DInput(battLowText, { battLowText = it }, keyboardType = KeyboardType.Number, placeholder = "20", minHeight = 36.dp)
+                TriggerKind.BatteryHigh -> DInput(battHighText, { battHighText = it }, keyboardType = KeyboardType.Number, placeholder = "80", minHeight = 36.dp)
                 TriggerKind.Headset -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterPill(if (zh) "插入耳机" else "Plugged", headsetPlug) { headsetPlug = true }
                     FilterPill(if (zh) "拔出耳机" else "Unplugged", !headsetPlug) { headsetPlug = false }
@@ -717,12 +815,21 @@ private fun TriggerEditDialog(
                     FilterPill(if (zh) "息屏" else "Off", screenEv == "off") { screenEv = "off" }
                     FilterPill(if (zh) "解锁" else "Unlock", screenEv == "unlock") { screenEv = "unlock" }
                 }
+                TriggerKind.AirplaneMode -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterPill(if (zh) "开启飞行模式" else "Turned on", airplaneOn) { airplaneOn = true }
+                    FilterPill(if (zh) "关闭飞行模式" else "Turned off", !airplaneOn) { airplaneOn = false }
+                }
+                TriggerKind.Boot -> Text(
+                    if (zh) "手机重启并开机完成后触发一次。" else "Runs once after device boot completes.",
+                    style = DshType.xs13, color = c.labelTertiary,
+                )
                 TriggerKind.Notification -> {
                     DInput(notifPkg, { notifPkg = it }, placeholder = if (zh) "应用包名（留空匹配所有 App）" else "Package name (optional)", minHeight = 36.dp)
                     DInput(notifKey, { notifKey = it }, placeholder = if (zh) "必须包含的关键词（可选）" else "Must contain keyword (optional)", minHeight = 36.dp)
                     DInput(notifEx, { notifEx = it }, placeholder = if (zh) "排除包含此词的通知（可选）" else "Exclude keyword (optional)", minHeight = 36.dp)
                 }
-                TriggerKind.AppOpened -> DInput(appPkg, { appPkg = it }, placeholder = if (zh) "应用包名，如 com.tencent.mm" else "Package name, e.g. com.example.app", minHeight = 36.dp)
+                TriggerKind.AppOpened, TriggerKind.AppClosed ->
+                    DInput(appPkg, { appPkg = it }, placeholder = if (zh) "应用包名，如 com.tencent.mm" else "Package name, e.g. com.example.app", minHeight = 36.dp)
                 TriggerKind.Geofence -> {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterPill(if (zh) "到达地点" else "Enter", geoEnter) { geoEnter = true }
@@ -738,7 +845,9 @@ private fun TriggerEditDialog(
     }
 }
 
-private enum class CondKind { TimeRange, Days, Battery, Charging, Wifi, Screen, Bluetooth }
+private enum class CondKind {
+    TimeRange, Days, Battery, Charging, Wifi, Network, Screen, Bluetooth, InCall, SoundMode, Headset, ForegroundApp,
+}
 
 private fun condKindOf(c: Condition): CondKind = when (c) {
     is Condition.TimeRange -> CondKind.TimeRange
@@ -746,8 +855,13 @@ private fun condKindOf(c: Condition): CondKind = when (c) {
     is Condition.Battery -> CondKind.Battery
     is Condition.Charging -> CondKind.Charging
     is Condition.Wifi -> CondKind.Wifi
+    is Condition.Network -> CondKind.Network
     is Condition.Screen -> CondKind.Screen
     is Condition.Bluetooth -> CondKind.Bluetooth
+    is Condition.InCall -> CondKind.InCall
+    is Condition.SoundMode -> CondKind.SoundMode
+    is Condition.Headset -> CondKind.Headset
+    is Condition.ForegroundApp -> CondKind.ForegroundApp
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -768,8 +882,14 @@ private fun ConditionEditDialog(
     var charging by remember(initial) { mutableStateOf((initial as? Condition.Charging)?.charging ?: true) }
     var wifiConn by remember(initial) { mutableStateOf((initial as? Condition.Wifi)?.connected ?: true) }
     var wifiSsid by remember(initial) { mutableStateOf((initial as? Condition.Wifi)?.ssid.orEmpty()) }
+    var netType by remember(initial) { mutableStateOf((initial as? Condition.Network)?.type ?: "wifi") }
     var screenState by remember(initial) { mutableStateOf((initial as? Condition.Screen)?.state ?: "unlocked") }
     var btConn by remember(initial) { mutableStateOf((initial as? Condition.Bluetooth)?.connected ?: true) }
+    var inCall by remember(initial) { mutableStateOf((initial as? Condition.InCall)?.inCall ?: false) }
+    var soundMode by remember(initial) { mutableStateOf((initial as? Condition.SoundMode)?.mode ?: "normal") }
+    var headsetPlug by remember(initial) { mutableStateOf((initial as? Condition.Headset)?.plugged ?: true) }
+    var fgPkg by remember(initial) { mutableStateOf((initial as? Condition.ForegroundApp)?.packageName.orEmpty()) }
+    var fgInvert by remember(initial) { mutableStateOf((initial as? Condition.ForegroundApp)?.invert ?: false) }
     var err by remember { mutableStateOf<String?>(null) }
 
     DDialog(
@@ -793,14 +913,24 @@ private fun ConditionEditDialog(
                     }
                     CondKind.Charging -> Condition.Charging(charging)
                     CondKind.Wifi -> Condition.Wifi(wifiConn, wifiSsid.trim().takeIf { it.isNotEmpty() })
+                    CondKind.Network -> Condition.Network(netType)
                     CondKind.Screen -> Condition.Screen(screenState)
                     CondKind.Bluetooth -> Condition.Bluetooth(btConn)
+                    CondKind.InCall -> Condition.InCall(inCall)
+                    CondKind.SoundMode -> Condition.SoundMode(soundMode)
+                    CondKind.Headset -> Condition.Headset(headsetPlug)
+                    CondKind.ForegroundApp -> {
+                        val p = fgPkg.trim()
+                        if (p.isEmpty()) {
+                            err = if (zh) "请填写应用包名" else "Package name required"; null
+                        } else Condition.ForegroundApp(p, fgInvert)
+                    }
                 }
                 if (built != null) onConfirm(built)
             }, size = BtnSize.Sm)
         },
     ) {
-        Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf(
                     CondKind.TimeRange to (if (zh) "时间段" else "Time range"),
@@ -808,8 +938,13 @@ private fun ConditionEditDialog(
                     CondKind.Battery to (if (zh) "电量" else "Battery"),
                     CondKind.Charging to (if (zh) "充电中" else "Charging"),
                     CondKind.Wifi to "Wi‑Fi",
+                    CondKind.Network to (if (zh) "网络类型" else "Network"),
                     CondKind.Screen to (if (zh) "屏幕" else "Screen"),
                     CondKind.Bluetooth to (if (zh) "蓝牙" else "Bluetooth"),
+                    CondKind.InCall to (if (zh) "通话中" else "In call"),
+                    CondKind.SoundMode to (if (zh) "响铃/勿扰" else "Sound mode"),
+                    CondKind.Headset to (if (zh) "耳机" else "Headset"),
+                    CondKind.ForegroundApp to (if (zh) "前台应用" else "Foreground app"),
                 ).forEach { (k, label) ->
                     FilterPill(label, kind == k) { kind = k; err = null }
                 }
@@ -835,6 +970,11 @@ private fun ConditionEditDialog(
                     }
                     DInput(wifiSsid, { wifiSsid = it }, placeholder = if (zh) "指定 SSID（留空匹配任意）" else "SSID (optional)", minHeight = 36.dp)
                 }
+                CondKind.Network -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterPill("Wi‑Fi", netType == "wifi") { netType = "wifi" }
+                    FilterPill(if (zh) "移动流量" else "Cellular", netType == "cellular") { netType = "cellular" }
+                    FilterPill(if (zh) "无网络" else "Offline", netType == "offline") { netType = "offline" }
+                }
                 CondKind.Screen -> FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf(
                         "unlocked" to (if (zh) "已解锁" else "Unlocked"),
@@ -849,6 +989,187 @@ private fun ConditionEditDialog(
                     FilterPill(if (zh) "蓝牙已连" else "Connected", btConn) { btConn = true }
                     FilterPill(if (zh) "蓝牙未连" else "Disconnected", !btConn) { btConn = false }
                 }
+                CondKind.InCall -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterPill(if (zh) "正在通话" else "In call", inCall) { inCall = true }
+                    FilterPill(if (zh) "不在通话中" else "Not in call", !inCall) { inCall = false }
+                }
+                CondKind.SoundMode -> FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(
+                        "normal" to (if (zh) "正常响铃" else "Normal"),
+                        "vibrate" to (if (zh) "震动" else "Vibrate"),
+                        "silent" to (if (zh) "静音" else "Silent"),
+                        "dnd" to (if (zh) "勿扰中" else "DND on"),
+                    ).forEach { (m, label) ->
+                        FilterPill(label, soundMode == m) { soundMode = m }
+                    }
+                }
+                CondKind.Headset -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterPill(if (zh) "已连接耳机" else "Connected", headsetPlug) { headsetPlug = true }
+                    FilterPill(if (zh) "未连接耳机" else "Disconnected", !headsetPlug) { headsetPlug = false }
+                }
+                CondKind.ForegroundApp -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterPill(if (zh) "当前处于该应用" else "In app", !fgInvert) { fgInvert = false }
+                        FilterPill(if (zh) "排除该应用" else "Not in app", fgInvert) { fgInvert = true }
+                    }
+                    DInput(fgPkg, { fgPkg = it }, placeholder = if (zh) "应用包名，如 com.tencent.mm" else "Package name", minHeight = 36.dp)
+                }
+            }
+            err?.let { Text(it, style = DshType.xs13, color = c.error) }
+        }
+    }
+}
+
+private enum class StepKind(val tool: String) {
+    SoundMode("sound_mode"),
+    Volume("volume_set"),
+    Dnd("dnd_set"),
+    Brightness("brightness_set"),
+    Flashlight("flashlight"),
+    Wifi("wifi_toggle"),
+    Bluetooth("bluetooth_toggle"),
+    MobileData("mobile_data_toggle"),
+    Media("media_control"),
+    AppLaunch("app_launch"),
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun StepEditDialog(
+    initial: Step?,
+    zh: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (Step) -> Unit,
+) {
+    val c = Dsh.colors
+    var kind by remember(initial) { mutableStateOf(StepKind.entries.firstOrNull { it.tool == initial?.tool } ?: StepKind.SoundMode) }
+    var soundMode by remember(initial) { mutableStateOf(initial?.args?.get("mode")?.jsonPrimitive?.contentOrNull ?: "silent") }
+    var stream by remember(initial) { mutableStateOf(initial?.args?.get("stream")?.jsonPrimitive?.contentOrNull ?: "music") }
+    var volText by remember(initial) { mutableStateOf((initial?.args?.get("percent")?.jsonPrimitive?.intOrNull ?: 50).toString()) }
+    var boolOn by remember(initial) { mutableStateOf(initial?.args?.get("on")?.jsonPrimitive?.booleanOrNull ?: true) }
+    var brightAuto by remember(initial) { mutableStateOf(initial?.args?.get("auto")?.jsonPrimitive?.booleanOrNull ?: false) }
+    var brightPct by remember(initial) { mutableStateOf((initial?.args?.get("percent")?.jsonPrimitive?.intOrNull ?: 60).toString()) }
+    var mediaAct by remember(initial) { mutableStateOf(initial?.args?.get("action")?.jsonPrimitive?.contentOrNull ?: "toggle") }
+    var launchPkg by remember(initial) { mutableStateOf(initial?.args?.get("package")?.jsonPrimitive?.contentOrNull.orEmpty()) }
+    var err by remember { mutableStateOf<String?>(null) }
+
+    val customStep = initial?.takeIf { StepKind.entries.none { k -> k.tool == it.tool } }
+
+    DDialog(
+        onDismiss = onDismiss,
+        title = stringResource(if (initial != null) R.string.rule_step_dialog_edit else R.string.rule_step_dialog_add),
+        buttons = {
+            DButton(stringResource(R.string.cancel), onDismiss, variant = BtnVariant.Outline, size = BtnSize.Sm)
+            DButton(stringResource(R.string.save), {
+                if (customStep != null) {
+                    onConfirm(customStep)
+                    return@DButton
+                }
+                err = null
+                val built: Step? = when (kind) {
+                    StepKind.SoundMode -> Step("sound_mode", buildJsonObject { put("mode", soundMode) })
+                    StepKind.Volume -> {
+                        val p = volText.trim().toIntOrNull()
+                        if (p == null || p !in 0..100) {
+                            err = if (zh) "音量需在 0–100" else "Volume 0–100"; null
+                        } else Step("volume_set", buildJsonObject { put("stream", stream); put("percent", p) })
+                    }
+                    StepKind.Dnd -> Step("dnd_set", buildJsonObject { put("on", boolOn) })
+                    StepKind.Brightness -> if (brightAuto) {
+                        Step("brightness_set", buildJsonObject { put("auto", true) })
+                    } else {
+                        val p = brightPct.trim().toIntOrNull()
+                        if (p == null || p !in 0..100) {
+                            err = if (zh) "亮度需在 0–100" else "Brightness 0–100"; null
+                        } else Step("brightness_set", buildJsonObject { put("percent", p) })
+                    }
+                    StepKind.Flashlight -> Step("flashlight", buildJsonObject { put("on", boolOn) })
+                    StepKind.Wifi -> Step("wifi_toggle", buildJsonObject { put("on", boolOn) })
+                    StepKind.Bluetooth -> Step("bluetooth_toggle", buildJsonObject { put("on", boolOn) })
+                    StepKind.MobileData -> Step("mobile_data_toggle", buildJsonObject { put("on", boolOn) })
+                    StepKind.Media -> Step("media_control", buildJsonObject { put("action", mediaAct) })
+                    StepKind.AppLaunch -> {
+                        val pkg = launchPkg.trim()
+                        if (pkg.isEmpty()) {
+                            err = if (zh) "请填写应用包名" else "Package name required"; null
+                        } else Step("app_launch", buildJsonObject { put("package", pkg) })
+                    }
+                }
+                if (built != null) onConfirm(built)
+            }, size = BtnSize.Sm)
+        },
+    ) {
+        if (customStep != null) {
+            Text(customStep.toString(), style = DshType.mono12, color = c.labelSecondary)
+            Text(stringResource(R.string.rule_steps_custom_readonly), style = DshType.xxs12, color = c.labelTertiary)
+            return@DDialog
+        }
+        Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(
+                    StepKind.SoundMode to (if (zh) "铃声模式" else "Ringer"),
+                    StepKind.Volume to (if (zh) "音量" else "Volume"),
+                    StepKind.Dnd to (if (zh) "勿扰" else "DND"),
+                    StepKind.Brightness to (if (zh) "亮度" else "Brightness"),
+                    StepKind.Flashlight to (if (zh) "手电筒" else "Flashlight"),
+                    StepKind.Wifi to "Wi‑Fi",
+                    StepKind.Bluetooth to (if (zh) "蓝牙" else "Bluetooth"),
+                    StepKind.MobileData to (if (zh) "移动数据" else "Mobile data"),
+                    StepKind.Media to (if (zh) "媒体控制" else "Media"),
+                    StepKind.AppLaunch to (if (zh) "打开应用" else "Launch app"),
+                ).forEach { (k, label) ->
+                    FilterPill(label, kind == k) { kind = k; err = null }
+                }
+            }
+            when (kind) {
+                StepKind.SoundMode -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterPill(if (zh) "静音" else "Silent", soundMode == "silent") { soundMode = "silent" }
+                    FilterPill(if (zh) "震动" else "Vibrate", soundMode == "vibrate") { soundMode = "vibrate" }
+                    FilterPill(if (zh) "响铃" else "Normal", soundMode == "normal") { soundMode = "normal" }
+                }
+                StepKind.Volume -> {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf(
+                            "music" to (if (zh) "媒体" else "Media"),
+                            "ring" to (if (zh) "铃声" else "Ring"),
+                            "alarm" to (if (zh) "闹钟" else "Alarm"),
+                            "notification" to (if (zh) "通知" else "Notification"),
+                            "call" to (if (zh) "通话" else "Call"),
+                        ).forEach { (st, label) ->
+                            FilterPill(label, stream == st) { stream = st }
+                        }
+                    }
+                    DInput(volText, { volText = it }, placeholder = "0–100", keyboardType = KeyboardType.Number, minHeight = 36.dp)
+                }
+                StepKind.Brightness -> {
+                    SettingsRow(
+                        title = if (zh) "自动调节亮度" else "Adaptive brightness",
+                        divider = false,
+                        trailing = { DSwitch(brightAuto, { brightAuto = it }) },
+                    )
+                    if (!brightAuto) {
+                        DInput(brightPct, { brightPct = it }, placeholder = "0–100", keyboardType = KeyboardType.Number, minHeight = 36.dp)
+                    }
+                }
+                StepKind.Dnd, StepKind.Flashlight, StepKind.Wifi, StepKind.Bluetooth, StepKind.MobileData ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterPill(if (zh) "开启" else "On", boolOn) { boolOn = true }
+                        FilterPill(if (zh) "关闭" else "Off", !boolOn) { boolOn = false }
+                    }
+                StepKind.Media -> FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(
+                        "toggle" to (if (zh) "播放/暂停" else "Play/Pause"),
+                        "play" to (if (zh) "播放" else "Play"),
+                        "pause" to (if (zh) "暂停" else "Pause"),
+                        "next" to (if (zh) "下一首" else "Next"),
+                        "previous" to (if (zh) "上一首" else "Previous"),
+                        "stop" to (if (zh) "停止" else "Stop"),
+                    ).forEach { (a, label) ->
+                        FilterPill(label, mediaAct == a) { mediaAct = a }
+                    }
+                }
+                StepKind.AppLaunch ->
+                    DInput(launchPkg, { launchPkg = it }, placeholder = if (zh) "应用包名，如 com.netease.cloudmusic" else "Package name", minHeight = 36.dp)
             }
             err?.let { Text(it, style = DshType.xs13, color = c.error) }
         }

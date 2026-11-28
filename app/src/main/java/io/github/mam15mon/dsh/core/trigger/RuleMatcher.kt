@@ -18,11 +18,17 @@ data class DeviceState(
     val screenInteractive: Boolean = true,
     val keyguardLocked: Boolean = false,
     val bluetoothConnected: Boolean = false,
+    val inCall: Boolean = false,
+    val foregroundPackage: String? = null,
+    val networkType: String = "offline",
+    val soundMode: String = "normal",
+    val dndActive: Boolean = false,
+    val headsetPlugged: Boolean = false,
 )
 
 /**
  * Pure rule matching, condition evaluation, scheduling, event formatting, and monitor-mask helpers
- * shared by [TriggerHub], [TriggerReceiver], [RuleMonitorService], and unit tests.
+ * shared by [TriggerHub], [TriggerReceiver], [SmsReceiver], [RuleMonitorService], and unit tests.
  */
 object RuleMatcher {
     const val FLAG_POWER = 1 shl 0
@@ -31,6 +37,9 @@ object RuleMatcher {
     const val FLAG_SCREEN = 1 shl 3
     const val FLAG_BLUETOOTH = 1 shl 4
     const val FLAG_WIFI = 1 shl 5
+    const val FLAG_NETWORK = 1 shl 6
+    const val FLAG_AIRPLANE = 1 shl 7
+    const val FLAG_CALL = 1 shl 8
 
     fun alarmRequestCode(ruleId: Long, triggerIndex: Int): Int =
         ((ruleId.toInt() and 0xFFFF) shl 4) or (triggerIndex and 0xF)
@@ -50,12 +59,17 @@ object RuleMatcher {
             for (trigger in spec.allTriggers) {
                 mask = mask or when (trigger) {
                     is Trigger.Power -> FLAG_POWER
-                    is Trigger.BatteryLow -> FLAG_BATTERY
+                    is Trigger.BatteryLow, is Trigger.BatteryHigh -> FLAG_BATTERY
                     is Trigger.Headset -> FLAG_HEADSET
                     is Trigger.Screen -> FLAG_SCREEN
                     is Trigger.Bluetooth -> FLAG_BLUETOOTH
                     is Trigger.Wifi -> FLAG_WIFI
-                    is Trigger.Time, is Trigger.Geofence, is Trigger.Notification, is Trigger.AppOpened, is Trigger.Manual -> 0
+                    is Trigger.Network -> FLAG_NETWORK
+                    is Trigger.AirplaneMode -> FLAG_AIRPLANE
+                    is Trigger.Call -> FLAG_CALL
+                    is Trigger.Time, is Trigger.Geofence, is Trigger.Notification,
+                    is Trigger.AppOpened, is Trigger.AppClosed, is Trigger.Sms,
+                    is Trigger.Boot, is Trigger.Manual -> 0
                 }
             }
         }
@@ -75,6 +89,8 @@ object RuleMatcher {
         is Trigger.Power -> ev is DeviceEvent.Power && ev.connected == t.connected
         // Fires when the level crosses down through the threshold while discharging (re-arms above it).
         is Trigger.BatteryLow -> ev is DeviceEvent.Battery && !ev.charging && ev.previous != null && ev.previous > t.percent && ev.percent <= t.percent
+        // Fires when the level crosses up through the threshold while charging.
+        is Trigger.BatteryHigh -> ev is DeviceEvent.Battery && ev.charging && ev.previous != null && ev.previous < t.percent && ev.percent >= t.percent
         is Trigger.Headset -> ev is DeviceEvent.Headset && ev.plugged == t.plugged
         is Trigger.Screen -> ev is DeviceEvent.Screen && ev.event == t.event
         is Trigger.Notification -> if (ev !is DeviceEvent.Notification) false else {
@@ -84,6 +100,17 @@ object RuleMatcher {
                 (t.excludeKeyword == null || !haystack.contains(t.excludeKeyword, true))
         }
         is Trigger.AppOpened -> ev is DeviceEvent.AppOpened && ev.packageName == t.packageName
+        is Trigger.AppClosed -> ev is DeviceEvent.AppClosed && ev.packageName == t.packageName
+        is Trigger.Call -> ev is DeviceEvent.Call && ev.event == t.event &&
+            (t.number == null || ev.number?.contains(t.number, true) == true)
+        is Trigger.Sms -> if (ev !is DeviceEvent.Sms) false else {
+            (t.sender == null || ev.sender.contains(t.sender, true)) &&
+                (t.keyword == null || ev.body.contains(t.keyword, true)) &&
+                (t.excludeKeyword == null || !ev.body.contains(t.excludeKeyword, true))
+        }
+        is Trigger.Network -> ev is DeviceEvent.Network && ev.type == t.type
+        is Trigger.AirplaneMode -> ev is DeviceEvent.AirplaneMode && ev.enabled == t.enabled
+        is Trigger.Boot -> ev is DeviceEvent.Boot
     }
 
     /** Unparseable stored values (rules from before validation) make the condition false, never a crash. */
@@ -111,6 +138,14 @@ object RuleMatcher {
             else -> false
         }
         is Condition.Bluetooth -> state.bluetoothConnected == c.connected
+        is Condition.InCall -> state.inCall == c.inCall
+        is Condition.ForegroundApp -> {
+            val match = state.foregroundPackage == c.packageName
+            if (c.invert) !match else match
+        }
+        is Condition.Network -> state.networkType == c.type
+        is Condition.SoundMode -> if (c.mode == "dnd") state.dndActive else state.soundMode == c.mode
+        is Condition.Headset -> state.headsetPlugged == c.plugged
     }
 
     fun nextFire(
@@ -175,6 +210,12 @@ object RuleMatcher {
             "notification from ${e.packageName} (content hidden: the user blocked reading this app's notifications)"
         }
         is DeviceEvent.AppOpened -> "app opened (${e.packageName})"
+        is DeviceEvent.AppClosed -> "app closed (${e.packageName})"
         is DeviceEvent.Geofence -> if (e.entering) "entered geofence" else "exited geofence"
+        is DeviceEvent.Call -> "call ${e.event}${e.number?.let { " ($it)" } ?: ""}"
+        is DeviceEvent.Sms -> "SMS from ${e.sender}: ${e.body.take(500)}"
+        is DeviceEvent.Network -> "network changed to ${e.type}"
+        is DeviceEvent.AirplaneMode -> if (e.enabled) "airplane mode on" else "airplane mode off"
+        is DeviceEvent.Boot -> "device booted"
     }
 }

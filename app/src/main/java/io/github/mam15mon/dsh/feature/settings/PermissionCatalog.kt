@@ -97,11 +97,16 @@ object PermissionCatalog {
         PermissionItem("bluetooth", "附近设备（蓝牙）", "Nearby devices", "按蓝牙设备名称触发自动化", "Trigger automations by Bluetooth device",
             setOf(ToolGroup.Rules), runtime = if (Build.VERSION.SDK_INT >= 31) listOf(Manifest.permission.BLUETOOTH_CONNECT) else null,
             check = { Build.VERSION.SDK_INT < 31 || granted(it, Manifest.permission.BLUETOOTH_CONNECT) }),
-        PermissionItem("comms", "联系人、短信、通话记录、日历", "Contacts, SMS, calls, calendar", "查联系人、读短信、记日程、发短信", "Look up contacts, read SMS, add events, send SMS",
-            setOf(ToolGroup.Comms), runtime = listOf(Manifest.permission.READ_CONTACTS, Manifest.permission.READ_SMS, Manifest.permission.SEND_SMS,
-                Manifest.permission.READ_CALL_LOG, Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR),
+        PermissionItem("comms", "联系人、电话、短信、日历", "Contacts, phone, SMS, calendar", "查联系人、来电与短信自动化、记日程、发短信", "Look up contacts, call/SMS automations, add events, send SMS",
+            setOf(ToolGroup.Comms, ToolGroup.Rules), runtime = listOf(Manifest.permission.READ_CONTACTS, Manifest.permission.READ_SMS, Manifest.permission.RECEIVE_SMS, Manifest.permission.SEND_SMS,
+                Manifest.permission.READ_PHONE_STATE, Manifest.permission.READ_CALL_LOG, Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR),
             restrictedSetting = true,
-            check = { granted(it, Manifest.permission.READ_CONTACTS) && granted(it, Manifest.permission.READ_SMS) }),
+            check = {
+                granted(it, Manifest.permission.READ_CONTACTS) &&
+                    granted(it, Manifest.permission.READ_SMS) &&
+                    granted(it, Manifest.permission.RECEIVE_SMS) &&
+                    granted(it, Manifest.permission.READ_PHONE_STATE)
+            }),
         PermissionItem("overlay", "悬浮窗", "Display over other apps", "显示悬浮球", "Show the floating button",
             emptySet(),
             check = { Settings.canDrawOverlays(it) },

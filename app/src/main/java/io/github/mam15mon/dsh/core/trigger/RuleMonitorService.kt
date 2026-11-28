@@ -17,6 +17,7 @@ import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
+import android.telephony.TelephonyManager
 import androidx.core.content.ContextCompat
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -37,6 +38,11 @@ class RuleMonitorService : Service() {
     private var stdMask = 0
     private var btRegistered = false
     private var wifiRegistered = false
+    private var callRegistered = false
+    private var netRegistered = false
+    private var lastCallState = TelephonyManager.CALL_STATE_IDLE
+    private var lastCallNumber: String? = null
+    private var lastNetType: String? = null
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
@@ -47,6 +53,7 @@ class RuleMonitorService : Service() {
                 Intent.ACTION_POWER_CONNECTED -> DeviceEvent.Power(true)
                 Intent.ACTION_POWER_DISCONNECTED -> DeviceEvent.Power(false)
                 Intent.ACTION_HEADSET_PLUG -> if (sticky) return else DeviceEvent.Headset(i.getIntExtra("state", 0) == 1)
+                Intent.ACTION_AIRPLANE_MODE_CHANGED -> if (sticky) return else DeviceEvent.AirplaneMode(i.getBooleanExtra("state", false))
                 Intent.ACTION_SCREEN_ON -> DeviceEvent.Screen("on")
                 Intent.ACTION_SCREEN_OFF -> DeviceEvent.Screen("off")
                 Intent.ACTION_USER_PRESENT -> DeviceEvent.Screen("unlock")
@@ -62,6 +69,70 @@ class RuleMonitorService : Service() {
                 else -> return
             }
             TriggerEvents.emit(ev)
+        }
+    }
+
+    /** Phone state broadcasts come from the telephony stack; guarded by READ_PHONE_STATE. */
+    private val callReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent) {
+            if (i.action != TelephonyManager.ACTION_PHONE_STATE_CHANGED) return
+            val stateStr = i.getStringExtra(TelephonyManager.EXTRA_STATE) ?: return
+            @Suppress("DEPRECATION")
+            val num = i.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER)?.trim()?.takeIf { it.isNotEmpty() }
+            if (num != null) lastCallNumber = num
+            when (stateStr) {
+                TelephonyManager.EXTRA_STATE_RINGING -> {
+                    if (lastCallState != TelephonyManager.CALL_STATE_RINGING) {
+                        lastCallState = TelephonyManager.CALL_STATE_RINGING
+                        TriggerEvents.emit(DeviceEvent.Call("ringing", lastCallNumber))
+                    } else if (num != null) {
+                        TriggerEvents.emit(DeviceEvent.Call("ringing", num))
+                    }
+                }
+                TelephonyManager.EXTRA_STATE_OFFHOOK -> {
+                    if (lastCallState != TelephonyManager.CALL_STATE_OFFHOOK) {
+                        lastCallState = TelephonyManager.CALL_STATE_OFFHOOK
+                        TriggerEvents.emit(DeviceEvent.Call("answered", lastCallNumber))
+                    }
+                }
+                TelephonyManager.EXTRA_STATE_IDLE -> {
+                    when (lastCallState) {
+                        TelephonyManager.CALL_STATE_RINGING -> {
+                            TriggerEvents.emit(DeviceEvent.Call("missed", lastCallNumber))
+                            TriggerEvents.emit(DeviceEvent.Call("ended", lastCallNumber))
+                        }
+                        TelephonyManager.CALL_STATE_OFFHOOK -> {
+                            TriggerEvents.emit(DeviceEvent.Call("ended", lastCallNumber))
+                        }
+                    }
+                    lastCallState = TelephonyManager.CALL_STATE_IDLE
+                    lastCallNumber = null
+                }
+            }
+        }
+    }
+
+    private fun currentNetType(cm: ConnectivityManager): String {
+        val caps = cm.activeNetwork?.let { cm.getNetworkCapabilities(it) } ?: return "offline"
+        return when {
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+            else -> "offline"
+        }
+    }
+
+    private val defaultNetCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) = checkNetChange()
+        override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) = checkNetChange()
+        override fun onLost(network: Network) = checkNetChange()
+    }
+
+    private fun checkNetChange() {
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return
+        val next = currentNetType(cm)
+        if (next != lastNetType) {
+            lastNetType = next
+            TriggerEvents.emit(DeviceEvent.Network(next))
         }
     }
 
@@ -136,7 +207,10 @@ class RuleMonitorService : Service() {
 
     private fun applyMask(mask: Int) {
         if (mask == activeMask) return
-        val nextStd = mask and (RuleMatcher.FLAG_POWER or RuleMatcher.FLAG_BATTERY or RuleMatcher.FLAG_HEADSET or RuleMatcher.FLAG_SCREEN)
+        val nextStd = mask and (
+            RuleMatcher.FLAG_POWER or RuleMatcher.FLAG_BATTERY or RuleMatcher.FLAG_HEADSET or
+                RuleMatcher.FLAG_SCREEN or RuleMatcher.FLAG_AIRPLANE
+            )
         if (nextStd != stdMask) {
             if (stdMask != 0) runCatching { unregisterReceiver(receiver) }
             if ((nextStd and RuleMatcher.FLAG_BATTERY) == 0) lastBattery = null
@@ -147,6 +221,7 @@ class RuleMonitorService : Service() {
                         addAction(Intent.ACTION_POWER_DISCONNECTED)
                     }
                     if ((nextStd and RuleMatcher.FLAG_HEADSET) != 0) addAction(Intent.ACTION_HEADSET_PLUG)
+                    if ((nextStd and RuleMatcher.FLAG_AIRPLANE) != 0) addAction(Intent.ACTION_AIRPLANE_MODE_CHANGED)
                     if ((nextStd and RuleMatcher.FLAG_SCREEN) != 0) {
                         addAction(Intent.ACTION_SCREEN_ON)
                         addAction(Intent.ACTION_SCREEN_OFF)
@@ -194,6 +269,37 @@ class RuleMonitorService : Service() {
                 lastSsid = null
             }
         }
+
+        val wantCall = (mask and RuleMatcher.FLAG_CALL) != 0
+        if (wantCall != callRegistered) {
+            if (wantCall) {
+                lastCallState = TelephonyManager.CALL_STATE_IDLE
+                lastCallNumber = null
+                ContextCompat.registerReceiver(this, callReceiver, IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED), ContextCompat.RECEIVER_EXPORTED)
+                callRegistered = true
+            } else {
+                runCatching { unregisterReceiver(callReceiver) }
+                callRegistered = false
+                lastCallState = TelephonyManager.CALL_STATE_IDLE
+                lastCallNumber = null
+            }
+        }
+
+        val wantNet = (mask and RuleMatcher.FLAG_NETWORK) != 0
+        if (wantNet != netRegistered) {
+            if (wantNet) {
+                runCatching {
+                    val cm = getSystemService(ConnectivityManager::class.java)
+                    lastNetType = currentNetType(cm)
+                    cm.registerDefaultNetworkCallback(defaultNetCallback)
+                    netRegistered = true
+                }.onFailure { android.util.Log.w("RuleMonitorService", "default network callback", it) }
+            } else {
+                runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(defaultNetCallback) }
+                netRegistered = false
+                lastNetType = null
+            }
+        }
         activeMask = mask
     }
 
@@ -202,9 +308,13 @@ class RuleMonitorService : Service() {
         if (stdMask != 0) runCatching { unregisterReceiver(receiver) }
         if (btRegistered) runCatching { unregisterReceiver(btReceiver) }
         if (wifiRegistered) runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(netCallback) }
+        if (callRegistered) runCatching { unregisterReceiver(callReceiver) }
+        if (netRegistered) runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(defaultNetCallback) }
         stdMask = 0
         btRegistered = false
         wifiRegistered = false
+        callRegistered = false
+        netRegistered = false
         activeMask = 0
         super.onDestroy()
     }

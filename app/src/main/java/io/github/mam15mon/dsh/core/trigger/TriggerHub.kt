@@ -3,6 +3,7 @@ package io.github.mam15mon.dsh.core.trigger
 import android.Manifest
 import android.app.AlarmManager
 import android.app.KeyguardManager
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
@@ -19,6 +20,7 @@ import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.PowerManager
+import android.telephony.TelephonyManager
 import android.util.Log
 import com.google.android.gms.common.ConnectionResult
 import com.google.android.gms.common.GoogleApiAvailability
@@ -178,7 +180,12 @@ class TriggerHub @Inject constructor(
                 is Trigger.Wifi -> if (t.ssid != null && !(granted(Manifest.permission.ACCESS_FINE_LOCATION) && granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION)))
                     add("location 'Allow all the time' (Android hides the Wi-Fi name otherwise)")
                 is Trigger.Notification -> if (context.packageName !in NotificationManagerCompat.getEnabledListenerPackages(context)) add("Notification access")
-                is Trigger.AppOpened -> if (DshAccessibilityService.instance == null) add("Accessibility service (DSH screen control)")
+                is Trigger.AppOpened, is Trigger.AppClosed -> if (DshAccessibilityService.instance == null) add("Accessibility service (DSH screen control)")
+                is Trigger.Call -> {
+                    if (!granted(Manifest.permission.READ_PHONE_STATE)) add("Phone state permission")
+                    if (t.number != null && !granted(Manifest.permission.READ_CALL_LOG)) add("Call log permission (for caller number)")
+                }
+                is Trigger.Sms -> if (!granted(Manifest.permission.RECEIVE_SMS)) add("SMS permission")
                 else -> {}
             }
         }
@@ -188,6 +195,8 @@ class TriggerHub @Inject constructor(
                     add("location 'Allow all the time' (Android hides the Wi-Fi name otherwise)")
                 is Condition.Bluetooth -> if (Build.VERSION.SDK_INT >= 31 && !granted(Manifest.permission.BLUETOOTH_CONNECT))
                     add("Nearby devices (Bluetooth) permission")
+                is Condition.ForegroundApp -> if (DshAccessibilityService.instance == null)
+                    add("Accessibility service (DSH screen control)")
                 else -> {}
             }
         }
@@ -290,6 +299,21 @@ class TriggerHub @Inject constructor(
         val needBt = conditions.any { it is Condition.Bluetooth }
         val btConn = if (needBt) currentBluetooth() else false
 
+        val needInCall = conditions.any { it is Condition.InCall }
+        val inCall = if (needInCall) currentInCall() else false
+
+        val needFg = conditions.any { it is Condition.ForegroundApp }
+        val fgPkg = if (needFg) DshAccessibilityService.foregroundPackage.value else null
+
+        val needNet = conditions.any { it is Condition.Network }
+        val netType = if (needNet) currentNetworkType() else "offline"
+
+        val needSound = conditions.any { it is Condition.SoundMode }
+        val (soundMode, dndActive) = if (needSound) currentSoundMode() else ("normal" to false)
+
+        val needHeadset = conditions.any { it is Condition.Headset }
+        val headset = if (needHeadset) currentHeadset() else false
+
         return DeviceState(
             batteryPct = pct,
             charging = charging,
@@ -298,8 +322,60 @@ class TriggerHub @Inject constructor(
             screenInteractive = interactive,
             keyguardLocked = locked,
             bluetoothConnected = btConn,
+            inCall = inCall,
+            foregroundPackage = fgPkg,
+            networkType = netType,
+            soundMode = soundMode,
+            dndActive = dndActive,
+            headsetPlugged = headset,
         )
     }
+
+    private fun currentInCall(): Boolean {
+        val audioInCall = runCatching {
+            val mode = context.getSystemService(AudioManager::class.java).mode
+            mode == AudioManager.MODE_IN_CALL || mode == AudioManager.MODE_IN_COMMUNICATION || mode == AudioManager.MODE_RINGTONE
+        }.getOrDefault(false)
+        if (audioInCall) return true
+        if (context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) return false
+        return runCatching {
+            @Suppress("DEPRECATION")
+            context.getSystemService(TelephonyManager::class.java)?.callState != TelephonyManager.CALL_STATE_IDLE
+        }.getOrDefault(false)
+    }
+
+    private fun currentNetworkType(): String = runCatching {
+        val cm = context.getSystemService(ConnectivityManager::class.java)
+        val caps = cm.activeNetwork?.let { cm.getNetworkCapabilities(it) } ?: return@runCatching "offline"
+        when {
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+            else -> "offline"
+        }
+    }.getOrDefault("offline")
+
+    private fun currentSoundMode(): Pair<String, Boolean> = runCatching {
+        val am = context.getSystemService(AudioManager::class.java)
+        val mode = when (am.ringerMode) {
+            AudioManager.RINGER_MODE_SILENT -> "silent"
+            AudioManager.RINGER_MODE_VIBRATE -> "vibrate"
+            else -> "normal"
+        }
+        val dnd = context.getSystemService(NotificationManager::class.java)
+            .currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL
+        mode to dnd
+    }.getOrDefault("normal" to false)
+
+    private fun currentHeadset(): Boolean = runCatching {
+        val am = context.getSystemService(AudioManager::class.java)
+        am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any {
+            it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                it.type == AudioDeviceInfo.TYPE_USB_HEADSET ||
+                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+        }
+    }.getOrDefault(false)
 
     private fun currentWifi(needSsid: Boolean): Pair<Boolean, String?> = runCatching {
         val cm = context.getSystemService(ConnectivityManager::class.java)

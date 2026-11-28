@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.location.LocationManager
+import android.provider.Telephony
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingEvent
 import dagger.hilt.android.AndroidEntryPoint
@@ -72,9 +73,15 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == EngineKeepAlive.ACTION_RESTORE) { engine.get().keepAlive(restored = true); return }
         if (intent.action !in ACTIONS) return
+        val isBoot = intent.action == Intent.ACTION_BOOT_COMPLETED
         val pending = goAsync()
         CoroutineScope(Dispatchers.Default).launch {
-            try { runCatching { hub.sync() }.onFailure { android.util.Log.e("BootReceiver", "sync failed", it) } } finally { pending.finish() }
+            try {
+                runCatching { hub.sync() }.onFailure { android.util.Log.e("BootReceiver", "sync failed", it) }
+                if (isBoot) {
+                    withTimeoutOrNull(8_000) { runCatching { hub.onEvent(DeviceEvent.Boot).join() } }
+                }
+            } finally { pending.finish() }
         }
     }
 
@@ -87,5 +94,27 @@ class BootReceiver : BroadcastReceiver() {
             Intent.ACTION_TIMEZONE_CHANGED,
             "android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED",
         )
+    }
+}
+
+/** Incoming SMS broadcast receiver (exported with BROADCAST_SMS permission so only the telephony stack can deliver). */
+@AndroidEntryPoint
+class SmsReceiver : BroadcastReceiver() {
+    @Inject lateinit var hub: TriggerHub
+
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
+        val msgs = runCatching { Telephony.Sms.Intents.getMessagesFromIntent(intent) }.getOrNull().orEmpty()
+        if (msgs.isEmpty()) return
+        val sender = msgs.firstNotNullOfOrNull { it.originatingAddress } ?: ""
+        val body = msgs.joinToString("") { it.messageBody.orEmpty() }
+        val pending = goAsync()
+        CoroutineScope(Dispatchers.Default).launch {
+            try {
+                withTimeoutOrNull(8_000) { hub.onEvent(DeviceEvent.Sms(sender, body)).join() }
+            } finally {
+                pending.finish()
+            }
+        }
     }
 }
