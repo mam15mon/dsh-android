@@ -60,5 +60,7 @@ test('root identity prompt omits "there is no root" and states uid 0', () => {
 
   const rootText = systemPromptSection('zh-CN', [screen], { root: true })
   assert.ok(rootText.includes('as root (uid 0)'))
+  assert.ok(rootText.includes('prefer bash for normal root commands'))
+  assert.ok(rootText.includes('reserve phone_sh'))
   assert.ok(!rootText.includes('there is no root'))
 })

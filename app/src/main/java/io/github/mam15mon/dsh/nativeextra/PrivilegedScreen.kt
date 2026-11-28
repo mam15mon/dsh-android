@@ -33,8 +33,9 @@ class PrivilegedScreen @Inject constructor(@ApplicationContext private val conte
             val bitmap = capture(display)
             return try { val image = Images.encode(bitmap)
                 val metrics = DisplayMetrics()
-                @Suppress("DEPRECATION")
-                context.getSystemService(DisplayManager::class.java).getDisplay(display).getRealMetrics(metrics)
+                val dm = context.getSystemService(DisplayManager::class.java)
+                val d = dm.getDisplay(display) ?: dm.getDisplay(android.view.Display.DEFAULT_DISPLAY)
+                @Suppress("DEPRECATION") d?.getRealMetrics(metrics)
                 ToolResult.image(Images.MIME, Base64.encodeToString(image.bytes, Base64.NO_WRAP),
                     "${shell.label} · image ${image.width}x${image.height}; screen ${metrics.widthPixels}x${metrics.heightPixels}. Multiply image coordinates by ${metrics.widthPixels.toFloat() / image.width} for screen pixels.")
             } finally { bitmap.recycle() }

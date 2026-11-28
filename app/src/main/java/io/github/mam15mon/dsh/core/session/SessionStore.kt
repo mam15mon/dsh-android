@@ -167,7 +167,7 @@ class SessionStore @Inject constructor(
         val preset = entity?.preset?.let { PermissionPreset.of(it) } ?: settings.current().defaultPreset
         android.util.Log.i(TAG, "session $sessionId loaded: preset ${preset.id} (${if (entity?.preset != null) "session row" else "settings default"})")
         MutableStateFlow(SessionLive(sessionId, entity?.title ?: "", events, running = false, preset = preset, modeId = entity?.modeId,
-            model = SessionModels.of(entity), exists = entity != null))
+            model = SessionModels.of(entity), workspace = entity?.workspace, exists = entity != null))
             .also { states[sessionId] = it }
     }
 
@@ -314,12 +314,13 @@ class SessionStore @Inject constructor(
         // A conversation the user starts keeps its own model from now on (#53): the one picked in the
         // composer, else a copy of the default. Automation runs keep following the default.
         val ownModel = live.model ?: settings.current().takeIf { existing == null && ruleId == null && ruleIdOfSession(sessionId) == null }?.let(SessionModels::default)
+        val ownWorkspace = SessionWorkspaces.initial(live.workspace, io.github.mam15mon.dsh.nativeextra.NativeRoot.selected(context), io.github.mam15mon.dsh.nativeextra.NativeRoot.enabled(context))
         if (existing == null) dao.upsert(SessionEntity(sessionId, text.lineSequence().first().take(40), now, now, ruleId, running = true, preset = live.preset.id, modeId = live.modeId,
-            modelProvider = ownModel?.provider, modelId = ownModel?.model, modelEffort = ownModel?.effort))
+            modelProvider = ownModel?.provider, modelId = ownModel?.model, modelEffort = ownModel?.effort, workspace = ownWorkspace))
         else dao.setRunning(sessionId, true)
         // Steering a running session keeps it an engine run (no startingEngine): see hasEngineRuns.
         mutate(sessionId) { it.copy(running = true, exists = true, runStartedAt = it.runStartedAt.takeIf { _ -> live.running } ?: now,
-            startingEngine = it.startingEngine || !live.running, waitingForNetwork = false, model = it.model ?: ownModel) }
+            startingEngine = it.startingEngine || !live.running, waitingForNetwork = false, model = it.model ?: ownModel, workspace = it.workspace ?: ownWorkspace) }
         engine.cancelIdleShutdown()
         if (ruleIdOfSession(sessionId) != null && engine.restarts.open && engine.state.value != EngineState.Ready) {
             // Circuit breaker open: automations do not restart a crash-looping engine (Doctor shows why).
@@ -336,7 +337,7 @@ class SessionStore @Inject constructor(
             // The guard needs the conversation's permission mode (ENGINE-CONTRACT: android/session/permission),
             // plugin-mode its session mode (android/session/mode); both are re-sent before every prompt,
             // also after a resume (a new engine generation knows neither).
-            applySavedWorkspace(sdk, sessionId); sendPreset(sdk, sessionId, flowOf(sessionId).value.preset)
+            applyWorkspace(sdk, sessionId); sendPreset(sdk, sessionId, flowOf(sessionId).value.preset)
             sendMode(sdk, sessionId, flowOf(sessionId).value.modeId)
             // Its level is checked against what this engine reported (refreshed at start).
             sendModel(sdk, sessionId, engine.sessionRoute(model))
@@ -356,7 +357,7 @@ class SessionStore @Inject constructor(
                 android.util.Log.w(TAG, "session $sessionId exists in the engine but was not open: resuming it (${e.message})")
                 if (!resume(sdk, sessionId)) throw e
                 resumedIn[sessionId] = gen
-                applySavedWorkspace(sdk, sessionId); sendPreset(sdk, sessionId, flowOf(sessionId).value.preset)
+                applyWorkspace(sdk, sessionId); sendPreset(sdk, sessionId, flowOf(sessionId).value.preset)
                 sendMode(sdk, sessionId, flowOf(sessionId).value.modeId)
                 sendModel(sdk, sessionId, engine.sessionRoute(model))
                 sdk.request("session/prompt", request)
@@ -390,12 +391,17 @@ class SessionStore @Inject constructor(
      * context-less session, so it is retried once; an unresumed session tries again on its next
      * prompt in this generation instead of being marked resumed.
      */
-    private suspend fun applySavedWorkspace(sdk: io.github.mam15mon.dsh.core.engine.JsonRpcPeer, sessionId: String) {
-        val savedWorkspace = io.github.mam15mon.dsh.nativeextra.NativeRoot.selected(context)
-        if (savedWorkspace.isNotEmpty()) sdk.request("session/working-directory/set", buildJsonObject {
-            put("sessionId", sessionId)
-            put("path", if (engine.isRootEngine) savedWorkspace else java.io.File(context.filesDir, "home").path)
-        })
+    private suspend fun applyWorkspace(sdk: io.github.mam15mon.dsh.core.engine.JsonRpcPeer, sessionId: String) {
+        val home = java.io.File(context.filesDir, "home").path
+        val current = flowOf(sessionId).value
+        val defaultWorkspace = io.github.mam15mon.dsh.nativeextra.NativeRoot.selected(context)
+        val target = SessionWorkspaces.resolve(current.workspace, defaultWorkspace, engine.isRootEngine, home)
+        if (target != home || current.workspace != null || defaultWorkspace.isNotEmpty() || current.events.any { it.seq >= 0 }) {
+            sdk.request("session/working-directory/set", buildJsonObject {
+                put("sessionId", sessionId)
+                put("path", target)
+            })
+        }
     }
 
     private suspend fun resume(sdk: io.github.mam15mon.dsh.core.engine.JsonRpcPeer, sessionId: String): Boolean {
@@ -607,6 +613,21 @@ class SessionStore @Inject constructor(
      * The composer changed the conversation's model (#53). A new conversation keeps it until its row is
      * written; a running one gets it at once: the engine routes the turn's next model request with it.
      */
+    suspend fun setWorkspace(sessionId: String, path: String?) {
+        val normalized = when {
+            path == null -> null
+            path.isEmpty() -> ""
+            else -> path.trimEnd('/').ifEmpty { "/" }
+        }
+        android.util.Log.i(TAG, "session $sessionId workspace -> ${normalized ?: "<default>"}")
+        if (dao.get(sessionId) != null) dao.setWorkspace(sessionId, normalized)
+        mutate(sessionId) { it.copy(workspace = normalized) }
+        val sdk = engine.sdkIfReady()
+        if (sdk != null && resumedIn[sessionId] == engine.generation) {
+            runCatching { applyWorkspace(sdk, sessionId) }.onFailure { android.util.Log.w(TAG, "workspace switch of $sessionId failed", it) }
+        }
+    }
+
     suspend fun setModel(sessionId: String, m: SessionModel) {
         android.util.Log.i(TAG, "session $sessionId model -> $m")
         if (dao.get(sessionId) != null) dao.setModel(sessionId, m.provider, m.model, m.effort)

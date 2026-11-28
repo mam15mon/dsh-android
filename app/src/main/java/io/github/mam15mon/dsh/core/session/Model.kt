@@ -111,6 +111,8 @@ data class SessionLive(
     val modeId: String? = null,
     /** The conversation's own model (#53) from the row (or picked for a new conversation); null = the settings default. */
     val model: SessionModel? = null,
+    /** Bound workspace directory: null = follows default, "" = app home, "/..." = Root project path. */
+    val workspace: String? = null,
     val exists: Boolean = false,
 ) {
     /** The mode can be picked only before the conversation's first message (see [modeChangeable]). */
@@ -183,3 +185,18 @@ data class SessionLive(
 
 /** What the sidebar status slot shows (dsh StateDot precedence). */
 enum class RowStatus { Approval, Question, Running, Idle }
+
+/** Resolves a conversation's effective working directory under Root or ordinary App identity. */
+object SessionWorkspaces {
+    fun resolve(sessionWorkspace: String?, defaultWorkspace: String, rootEnabled: Boolean, appHome: String): String {
+        if (!rootEnabled) return appHome
+        val chosen = sessionWorkspace ?: defaultWorkspace
+        return chosen.ifEmpty { appHome }
+    }
+
+    fun initial(picked: String?, defaultWorkspace: String, rootEnabled: Boolean): String? = when {
+        picked != null -> picked
+        rootEnabled && defaultWorkspace.isNotEmpty() -> defaultWorkspace
+        else -> null
+    }
+}

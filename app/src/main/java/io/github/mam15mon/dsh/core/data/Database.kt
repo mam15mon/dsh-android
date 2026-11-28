@@ -51,6 +51,8 @@ data class SessionEntity(
     val modelProvider: String? = null,
     val modelId: String? = null,
     val modelEffort: String? = null,
+    /** Bound workspace directory: null = follows default, "" = app home, "/..." = Root project path. */
+    val workspace: String? = null,
 )
 
 /**
@@ -104,6 +106,8 @@ interface SessionDao {
     suspend fun setMode(id: String, modeId: String?)
     @Query("UPDATE sessions SET modelProvider = :provider, modelId = :model, modelEffort = :effort WHERE id = :id")
     suspend fun setModel(id: String, provider: String?, model: String?, effort: String?)
+    @Query("UPDATE sessions SET workspace = :workspace WHERE id = :id")
+    suspend fun setWorkspace(id: String, workspace: String?)
     @Query("SELECT * FROM sessions WHERE id = :id")
     suspend fun get(id: String): SessionEntity?
     @Query("SELECT * FROM sessions WHERE running = 1")
@@ -169,7 +173,7 @@ abstract class DshDatabase : RoomDatabase() {
     abstract fun usage(): UsageDao
 }
 
-const val DB_VERSION = 5
+const val DB_VERSION = 6
 
 /**
  * Schema migrations. Every released version from 2 on is migrated in place (conversations are user
@@ -202,7 +206,14 @@ object Migrations {
         override fun migrate(db: SupportSQLiteDatabase) { SQL_4_5.forEach(db::execSQL) }
     }
 
-    val ALL: Array<Migration> = arrayOf(M_2_3, M_3_4, M_4_5)
+    /** v6: per-session bound workspace. Existing rows read null = follows default. */
+    val SQL_5_6 = listOf("ALTER TABLE `sessions` ADD COLUMN `workspace` TEXT")
+
+    val M_5_6 = object : Migration(5, 6) {
+        override fun migrate(db: SupportSQLiteDatabase) { SQL_5_6.forEach(db::execSQL) }
+    }
+
+    val ALL: Array<Migration> = arrayOf(M_2_3, M_3_4, M_4_5, M_5_6)
     /** Versions that are still recreated instead of migrated. */
     val DESTRUCTIVE_FROM = intArrayOf(1)
 }

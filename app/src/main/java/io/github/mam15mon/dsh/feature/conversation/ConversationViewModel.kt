@@ -157,11 +157,13 @@ open class ConversationController(
         val cur = model.value.selection
         if (cur.isDeepSeek) store.setModel(sessionId.value, cur.copy(effort = e.id))
     }
-    /** 推理强度 of this conversation's third-party model ([level] null = its default). */
+    /** This conversation's 推理等级 of third-party model ([level] null = its default). */
     fun setReasoning(level: String?) = viewModelScope.launch {
         val cur = model.value.selection
         if (!cur.isDeepSeek) store.setModel(sessionId.value, cur.copy(effort = level))
     }
+    /** This conversation's bound Root project path ("" = app home, null = follow default). */
+    fun setWorkspace(path: String?) = viewModelScope.launch { store.setWorkspace(sessionId.value, path) }
 
     /** The screen is in front again: its session counts as seen (unread dot, notification). */
     fun markSeen() = store.setViewing(this, id)

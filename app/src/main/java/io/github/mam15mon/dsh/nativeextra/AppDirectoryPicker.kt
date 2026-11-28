@@ -59,6 +59,7 @@ private data class DirectoryApp(val info: ApplicationInfo, val name: String) {
 }
 
 private val AppFilterTabs = listOf("全部", "用户应用", "系统应用")
+private val AppIconCache = android.util.LruCache<String, ImageBitmap>(128)
 
 @Composable
 fun AppDirectoryPicker(onDismiss: () -> Unit, onSelect: (String, String) -> Unit) {
@@ -109,9 +110,11 @@ fun AppDirectoryPicker(onDismiss: () -> Unit, onSelect: (String, String) -> Unit
             filtered.isEmpty() -> EmptyNote("没有匹配的应用")
             else -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp).navigationBarsPadding()) {
                 itemsIndexed(filtered, key = { _, app -> app.info.packageName }) { index, app ->
-                    val icon by produceState<ImageBitmap?>(null, app.info.packageName) {
+                    val icon by produceState<ImageBitmap?>(AppIconCache.get(app.info.packageName), app.info.packageName) {
+                        if (value != null) return@produceState
                         value = withContext(Dispatchers.IO) {
                             runCatching { app.info.loadIcon(context.packageManager).toBitmap(96, 96).asImageBitmap() }.getOrNull()
+                                ?.also { AppIconCache.put(app.info.packageName, it) }
                         }
                     }
                     SettingsRow(

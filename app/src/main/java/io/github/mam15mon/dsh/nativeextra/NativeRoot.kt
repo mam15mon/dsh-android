@@ -12,10 +12,17 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 data class RootResult(val code: Int, val output: String)
+data class RootProject(val name: String, val path: String)
 
 object NativeRoot {
+    private val _version = kotlinx.coroutines.flow.MutableStateFlow(0)
+    val version: kotlinx.coroutines.flow.StateFlow<Int> = _version
+
     fun enabled(c: Context) = c.getSharedPreferences("native_root", 0).getBoolean("enabled", false)
-    fun setEnabled(c: Context, on: Boolean) { c.getSharedPreferences("native_root", 0).edit().putBoolean("enabled", on).commit() }
+    fun setEnabled(c: Context, on: Boolean) {
+        c.getSharedPreferences("native_root", 0).edit().putBoolean("enabled", on).commit()
+        _version.value++
+    }
     fun quote(s: String) = "'" + s.replace("'", "'\\''") + "'"
 
     suspend fun exec(c: Context, command: String, timeoutMs: Long = 30_000): RootResult {
@@ -59,6 +66,28 @@ object NativeRoot {
     fun saveDirectory(c: Context, path: String) {
         require(path.startsWith("/") && !path.contains('\n') && !path.contains('\u0000')) { "请输入绝对目录路径" }
         c.getSharedPreferences("native_root", 0).edit().putString("workspace", path.trimEnd('/').ifEmpty { "/" }).commit()
+        _version.value++
     }
-    fun clearDirectory(c: Context) { c.getSharedPreferences("native_root", 0).edit().remove("workspace").commit() }
+    fun clearDirectory(c: Context) {
+        c.getSharedPreferences("native_root", 0).edit().remove("workspace").commit()
+        _version.value++
+    }
+    fun projects(c: Context): List<RootProject> {
+        val prefs = c.getSharedPreferences("native_root", 0)
+        val items = runCatching { org.json.JSONArray(prefs.getString("projects", "[]")) }.getOrElse { org.json.JSONArray() }
+        val saved = (0 until items.length()).mapNotNull { i ->
+            val p = items.optJSONObject(i) ?: return@mapNotNull null
+            val name = p.optString("name")
+            val path = p.optString("path")
+            if (path.isNotEmpty()) RootProject(name.ifEmpty { File(path).name }, path) else null
+        }
+        val sel = selected(c)
+        return if (sel.isNotEmpty() && saved.none { it.path == sel }) saved + RootProject(File(sel).name, sel) else saved
+    }
+    fun saveProjects(c: Context, list: List<RootProject>) {
+        val json = org.json.JSONArray()
+        list.forEach { json.put(org.json.JSONObject().put("name", it.name).put("path", it.path)) }
+        c.getSharedPreferences("native_root", 0).edit().putString("projects", json.toString()).commit()
+        _version.value++
+    }
 }

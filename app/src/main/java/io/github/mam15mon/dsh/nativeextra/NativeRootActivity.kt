@@ -65,8 +65,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.File
 
 class NativeRootActivity : ComponentActivity() {
@@ -80,8 +78,7 @@ class NativeRootActivity : ComponentActivity() {
     private fun ProjectsPage() {
         val c = Dsh.colors
         val scope = rememberCoroutineScope()
-        val prefs = remember { getSharedPreferences("native_root", 0) }
-        var projects by remember { mutableStateOf(loadProjects()) }
+        var projects by remember { mutableStateOf(NativeRoot.projects(this)) }
         var selected by remember { mutableStateOf(NativeRoot.selected(this)) }
         var root by remember { mutableStateOf(false) }
         var checkingRoot by remember { mutableStateOf(NativeRoot.enabled(this)) }
@@ -130,17 +127,15 @@ class NativeRootActivity : ComponentActivity() {
             }
         }
 
-        fun store() {
-            val json = JSONArray()
-            projects.forEach { (label, path) -> json.put(JSONObject().put("name", label).put("path", path)) }
-            prefs.edit().putString("projects", json.toString()).commit()
-        }
+        fun store() = NativeRoot.saveProjects(this@NativeRootActivity, projects)
 
         suspend fun canonical(path: String): String {
             require(path.startsWith("/") && path != "/" && path.none { it == '\n' || it == '\t' || it == '\u0000' }) { "请选择具体文件夹" }
-            val result = NativeRoot.exec(this, "test -d ${NativeRoot.quote(path)} && realpath -- ${NativeRoot.quote(path)}")
-            check(result.code == 0) { "文件夹不存在或无法访问" }
-            val real = result.output.trim()
+            val raw = withContext(Dispatchers.IO) {
+                RootConnection.service(this@NativeRootActivity).exec("test -d ${NativeRoot.quote(path)} && realpath -- ${NativeRoot.quote(path)}", 15_000)
+            }
+            check(raw.substringBefore('\n') == "0") { "文件夹不存在或无法访问" }
+            val real = raw.substringAfter('\n').trim()
             val prefix = "/storage/emulated/${android.os.Process.myUid() / 100000}"
             return if (real == prefix || real.startsWith("$prefix/")) "/data/media/${android.os.Process.myUid() / 100000}" + real.removePrefix(prefix) else real
         }
@@ -301,6 +296,8 @@ class NativeRootActivity : ComponentActivity() {
                             )
                             if (!root && !checkingRoot) {
                                 Text("没有 Root 或未授权时，不能挂载项目。Shizuku 不能代替 Root 挂载。", style = DshType.xs13, color = c.labelSecondary)
+                            } else if (root) {
+                                Text("Root 模式下引擎与已启用扩展均以 uid 0 运行，请仅安装可信扩展。", style = DshType.xs13, color = c.labelSecondary)
                             }
                         }
                         Row(
@@ -369,7 +366,9 @@ class NativeRootActivity : ComponentActivity() {
                         }
                     } else {
                         SettingsCard {
-                            projects.forEachIndexed { index, (label, path) ->
+                            projects.forEachIndexed { index, project ->
+                                val label = project.name
+                                val path = project.path
                                 val isCurrent = selected == path
                                 if (index > 0) HDivider(Modifier.padding(start = 16.dp))
                                 Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -391,7 +390,7 @@ class NativeRootActivity : ComponentActivity() {
                                                     NativeRoot.clearDirectory(this@NativeRootActivity)
                                                     selected = ""
                                                 }
-                                                projects = projects.filterNot { it.second == path }
+                                                projects = projects.filterNot { it.path == path }
                                                 store()
                                                 message = "已移出列表，手机上的文件没有删除。"
                                             },
@@ -411,7 +410,7 @@ class NativeRootActivity : ComponentActivity() {
                                                         NativeRoot.saveDirectory(this@NativeRootActivity, path)
                                                         selected = path
                                                     }
-                                                    message = "已保存选择。当前任务结束后，新建会话使用所选项目；旧会话可能保留原目录。"
+                                                    message = "已保存默认项目。空闲时自动切换引擎；已有会话可在输入栏「+」菜单中单独切换工作项目。"
                                                 }
                                             },
                                             variant = if (isCurrent) BtnVariant.Outline else BtnVariant.Primary,
@@ -424,9 +423,9 @@ class NativeRootActivity : ComponentActivity() {
                         }
                     }
 
-                    if (selected.isNotEmpty()) {
+                    if (projects.isNotEmpty()) {
                         Text(
-                            "切换项目后请结束当前任务，并在设置 → 关于中重启引擎，再新建会话。",
+                            "设为默认项目后新建会话将自动使用；也可在任意对话的输入栏「+」菜单按会话切换项目。",
                             Modifier.padding(start = 4.dp, top = 10.dp),
                             style = DshType.xxs12,
                             color = c.labelTertiary,
@@ -460,7 +459,7 @@ class NativeRootActivity : ComponentActivity() {
                         text = "添加",
                         onClick = {
                             val path = namePath!!
-                            projects = projects.filterNot { it.second == path } + (name.trim() to path)
+                            projects = projects.filterNot { it.path == path } + RootProject(name.trim(), path)
                             store()
                             namePath = null
                             message = "项目已添加，点击“使用此项目”开始使用。"
@@ -481,13 +480,5 @@ class NativeRootActivity : ComponentActivity() {
                 Text("直接读写这个文件夹里的原文件。", style = DshType.xxs12, color = c.labelTertiary)
             }
         }
-    }
-
-    private fun loadProjects(): List<Pair<String, String>> {
-        val prefs = getSharedPreferences("native_root", 0)
-        val items = JSONArray(prefs.getString("projects", "[]"))
-        val saved = (0 until items.length()).map { val p = items.getJSONObject(it); p.getString("name") to p.getString("path") }
-        val selected = NativeRoot.selected(this)
-        return if (selected.isNotEmpty() && saved.none { it.second == selected }) saved + (File(selected).name to selected) else saved
     }
 }

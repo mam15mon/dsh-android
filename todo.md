@@ -26,6 +26,14 @@
   - 修复 `ShellFiles.kt` 与 `ShellFilesTest.kt` 在 Windows 下的路径分隔符硬编码问题（防止 `move` 校验失效触发无限递归 `copyRecursively`），以及 `ExtensionsStoreTest.kt` 中 `SharedFlow` 订阅竞态死锁。
   - 清理本地残留的 `native-probe/` 目录与旧版 `jackwener` Hilt 增量构建缓存。
 
+- [x] **完善 Root 按会话工作区与细节打磨**
+  - Room 升级至 v6（`SessionEntity.workspace` + `M_5_6` 迁移），冻结 v5 schema 并在 `MigrationTest` 补齐 v5→v6 迁移验证。
+  - 新增 `SessionWorkspaces` 及 `SessionWorkspaceTest`，在 `SessionStore`、`RootTools`（`phone_workspace`）与 `HomeScreen` 的 `LocalLinkBase` 全面接入按会话绑定工作目录，并修复取消默认项目后旧会话卡在旧目录的问题。
+  - `Composer` 的 `+`/`/` 菜单在开启 Root 时新增「工作项目」切换弹窗（支持应用私有目录与已添加项目即时切换）。
+  - `NativeRootActivity` 复用 `NativeRoot.projects`/`saveProjects` 与 `RootConnection` 执行 `canonical()` 避免重复冷起 `su`，修正过时文案并补充 `uid 0` 扩展安全提示。
+  - 修复 `PrivilegedScreen` 副屏已销毁时 `getDisplay(display)` 的空指针风险，为 `AppDirectoryPicker` 添加 `LruCache` 应用图标缓存。
+  - 细化 Root 模式下 `bash` 与 `phone_sh` 的系统提示词分工并重编 `engine.zip`（`0.2.2-rc.5-abc7fb242ea`）。
+
 ## 待办 / 需确认项
 
 - [ ] **R8 混淆与资源裁剪真机验证**（`app/build.gradle.kts` 当前保持 `isMinifyEnabled = false` / `isShrinkResources = false`；开启前需在真机上完整验证 JNI、Shizuku、RootService 反射与序列化流程）。

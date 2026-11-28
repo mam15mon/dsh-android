@@ -121,7 +121,7 @@ class MigrationTest {
             c.exec("INSERT INTO events (sessionId, seq, type, json, time) VALUES ('s1', 0, 'user/message', '{}', 5)")
             Migrations.SQL_4_5.forEach { c.exec(it) }
             for (table in listOf("sessions", "events", "rules", "rule_runs", "usage"))
-                assertEquals("table $table matches the v$DB_VERSION schema", expectedColumns(DB_VERSION, table), c.columns(table))
+                assertEquals("table $table matches the v5 schema", expectedColumns(5, table), c.columns(table))
             c.createStatement().use { st ->
                 st.executeQuery("SELECT title, preset, modeId, muted, modelProvider, modelId, modelEffort FROM sessions").use { rs ->
                     assertTrue(rs.next()); assertEquals("整理下载", rs.getString("title")); assertEquals("read-only", rs.getString("preset"))
@@ -134,10 +134,29 @@ class MigrationTest {
         }
     }
 
+    @Test fun `5 to 6 adds workspace, unset (follows default) for every existing conversation`() {
+        create(5).use { c ->
+            c.exec("INSERT INTO sessions (id, title, createdAt, updatedAt, ruleId, running, parentId, pinned, archived, unread, preset, modeId, muted, modelProvider, modelId, modelEffort) " +
+                "VALUES ('s1', '整理下载', 1, 2, NULL, 0, NULL, 1, 0, 0, 'read-only', 'chat', 1, '', 'deepseek-chat', 'high')")
+            c.exec("INSERT INTO events (sessionId, seq, type, json, time) VALUES ('s1', 0, 'user/message', '{}', 5)")
+            Migrations.SQL_5_6.forEach { c.exec(it) }
+            for (table in listOf("sessions", "events", "rules", "rule_runs", "usage"))
+                assertEquals("table $table matches the v$DB_VERSION schema", expectedColumns(DB_VERSION, table), c.columns(table))
+            c.createStatement().use { st ->
+                st.executeQuery("SELECT title, modelId, workspace FROM sessions").use { rs ->
+                    assertTrue(rs.next()); assertEquals("整理下载", rs.getString("title")); assertEquals("deepseek-chat", rs.getString("modelId"))
+                    assertNull(rs.getString("workspace"))
+                }
+                st.executeQuery("SELECT COUNT(*) FROM events").use { rs -> rs.next(); assertEquals(1, rs.getInt(1)) }
+            }
+            c.exec("UPDATE sessions SET workspace = '/sdcard/proj' WHERE id = 's1'")
+        }
+    }
+
     @Test fun `a fresh database has the same tables as a migrated one`() {
         create(DB_VERSION).use { fresh ->
             create(2).use { migrated ->
-                (Migrations.SQL_2_3 + Migrations.SQL_3_4 + Migrations.SQL_4_5).forEach { migrated.exec(it) }
+                (Migrations.SQL_2_3 + Migrations.SQL_3_4 + Migrations.SQL_4_5 + Migrations.SQL_5_6).forEach { migrated.exec(it) }
                 for (table in listOf("sessions", "events", "rules", "rule_runs", "usage")) assertEquals(table, fresh.columns(table), migrated.columns(table))
             }
         }

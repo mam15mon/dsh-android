@@ -16,7 +16,11 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class RootTools @Inject constructor(@ApplicationContext private val context: Context, private val shell: io.github.mam15mon.dsh.nativeextra.PhoneShell) : ToolSet {
+class RootTools @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val shell: io.github.mam15mon.dsh.nativeextra.PhoneShell,
+    private val sessions: io.github.mam15mon.dsh.core.data.SessionDao,
+) : ToolSet {
     private suspend fun command(cmd: String, timeout: Long = 30_000): ToolResult {
         check(NativeRoot.enabled(context)) { "Root 操作未开启" }
         val result = shell.exec(cmd, timeout)
@@ -35,10 +39,17 @@ class RootTools @Inject constructor(@ApplicationContext private val context: Con
             }
         },
         object : Tool("phone_workspace", ToolGroup.Files, Risk.read, false,
-            "Show the selected original phone project path. A Root-authorized engine runs as uid 0 directly in this directory, without a FUSE alias or copy. Ordinary App engines cannot use Root-only projects. Changes affect original files. Use this to explain the real project path, not the old phone-workspace alias.", {}) {
-            override suspend fun invoke(args: JsonObject, call: CallContext) = ToolResult.text(
-                "Root enabled: ${NativeRoot.enabled(context)}\nSelected source: ${NativeRoot.selected(context).ifEmpty { "none" }}\nEngine identity is verified at startup; Root engines use the selected source directly.\nManage the project in Phone permissions → Root 与项目. Root identity switches automatically when idle. Without Root, the saved project is paused and the App engine uses its own home; do not claim it is accessing the Root-only project. The manually selected project is persistent across app and engine restarts and is applied to resumed conversations before the next prompt. Without Root its access pauses; restoring Root resumes the same saved project."
-            )
+            "Show the active working directory for this conversation and the default Root project. A Root-authorized engine runs as uid 0 directly in that directory, without a FUSE alias or copy. Ordinary App engines cannot use Root-only projects. Changes affect original files.", {}) {
+            override suspend fun invoke(args: JsonObject, call: CallContext): ToolResult {
+                val enabled = NativeRoot.enabled(context)
+                val defaultProject = NativeRoot.selected(context)
+                val appHome = File(context.filesDir, "home").path
+                val sessionWorkspace = call.sessionId.substringBefore('/').takeIf { it.isNotEmpty() }?.let { sessions.get(it)?.workspace }
+                val active = io.github.mam15mon.dsh.core.session.SessionWorkspaces.resolve(sessionWorkspace, defaultProject, enabled, appHome)
+                return ToolResult.text(
+                    "Root enabled: $enabled\nActive session workspace: $active\nDefault project: ${defaultProject.ifEmpty { "none" }}\nManage projects in Phone permissions → Root 与项目 or the composer '+' menu."
+                )
+            }
         },
     )
 }

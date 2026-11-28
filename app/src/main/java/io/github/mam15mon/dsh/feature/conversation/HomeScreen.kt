@@ -55,7 +55,11 @@ import io.github.mam15mon.dsh.core.designsystem.Tone
 import io.github.mam15mon.dsh.core.designsystem.Whale
 import io.github.mam15mon.dsh.core.session.Conversation
 import io.github.mam15mon.dsh.core.session.SessionLive
+import io.github.mam15mon.dsh.core.session.SessionWorkspaces
 import io.github.mam15mon.dsh.feature.trajectory.TrajectoryView
+import io.github.mam15mon.dsh.feature.viewer.LocalLinkBase
+import io.github.mam15mon.dsh.nativeextra.NativeRoot
+import io.github.mam15mon.dsh.nativeextra.NativeRootActivity
 import kotlinx.coroutines.launch
 
 /**
@@ -115,7 +119,15 @@ private fun ConversationPane(vm: HomeViewModel, onMenu: () -> Unit, onSettings: 
     // happening, so stop the "working" animations: the UI settles to idle, which also lets
     // accessibility services and UI automation read the card's buttons.
     val waitingOnUser = live.approval != null || live.question != null || live.permission != null || live.takeover != null
-    CompositionLocalProvider(LocalReducedMotion provides (LocalReducedMotion.current || waitingOnUser)) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val rootVersion by NativeRoot.version.collectAsStateWithLifecycle()
+    val linkBase = remember(live.workspace, rootVersion) {
+        SessionWorkspaces.resolve(live.workspace, NativeRoot.selected(context), NativeRoot.enabled(context), java.io.File(context.filesDir, "home").path)
+    }
+    CompositionLocalProvider(
+        LocalReducedMotion provides (LocalReducedMotion.current || waitingOnUser),
+        LocalLinkBase provides linkBase,
+    ) {
     Column(Modifier.fillMaxSize().background(c.bgBase).statusBarsPadding()) {
         Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             IconBtn(R.drawable.dsw_panel_left_outline, onMenu, size = 40.dp, iconSize = 18.dp, tint = c.labelPrimary, contentDescription = stringResource(R.string.open_sidebar))
@@ -191,6 +203,15 @@ fun ComposerSlot(vm: ConversationController, composer: ComposerState, settings: 
                  /** Bumped by a voice summon (assistant gesture, ball long-press): start listening. */
                  listenRequest: Int = 0) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val rootVersion by NativeRoot.version.collectAsStateWithLifecycle()
+    val rootEnabled = remember(rootVersion) { NativeRoot.enabled(context) }
+    val defaultWorkspace = remember(rootVersion) { NativeRoot.selected(context) }
+    val rootProjects = remember(rootVersion) { NativeRoot.projects(context) }
+    val effectiveWorkspace = remember(live.workspace, rootEnabled, defaultWorkspace) {
+        val home = java.io.File(context.filesDir, "home").path
+        val resolved = SessionWorkspaces.resolve(live.workspace, defaultWorkspace, rootEnabled, home)
+        if (resolved == home) "" else resolved
+    }
     val modelChangePending by vm.modelChangePending.collectAsStateWithLifecycle()
     val model by vm.model.collectAsStateWithLifecycle()
     val send = {
@@ -245,6 +266,11 @@ fun ComposerSlot(vm: ConversationController, composer: ComposerState, settings: 
             modeLocked = !live.modeChangeable,
             onMode = vm::setMode,
             onManageModes = onManageModes,
+            rootEnabled = rootEnabled,
+            workspace = effectiveWorkspace,
+            projects = rootProjects,
+            onWorkspace = vm::setWorkspace,
+            onManageProjects = { context.startActivity(android.content.Intent(context, NativeRootActivity::class.java)) },
             voice = voice,
         )
     }

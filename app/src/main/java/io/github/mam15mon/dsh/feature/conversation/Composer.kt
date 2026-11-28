@@ -58,6 +58,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import io.github.mam15mon.dsh.nativeextra.RootProject
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.input.pointer.pointerInput
@@ -77,7 +78,11 @@ import io.github.mam15mon.dsh.core.session.todoDockMode
 import io.github.mam15mon.dsh.core.provider.ModelReasoning
 import io.github.mam15mon.dsh.core.provider.ProviderConfig
 import io.github.mam15mon.dsh.core.provider.ReasoningLevels
+import io.github.mam15mon.dsh.core.designsystem.BtnSize
+import io.github.mam15mon.dsh.core.designsystem.BtnVariant
 import io.github.mam15mon.dsh.core.designsystem.Chevron
+import io.github.mam15mon.dsh.core.designsystem.DButton
+import io.github.mam15mon.dsh.core.designsystem.DDialog
 import io.github.mam15mon.dsh.core.designsystem.DIcon
 import io.github.mam15mon.dsh.core.designsystem.DInput
 import io.github.mam15mon.dsh.core.designsystem.DMenu
@@ -91,6 +96,9 @@ import io.github.mam15mon.dsh.core.designsystem.MenuItem
 import io.github.mam15mon.dsh.core.designsystem.MenuSectionTitle
 import io.github.mam15mon.dsh.core.designsystem.Radius
 import io.github.mam15mon.dsh.core.designsystem.RiskConfirmDialog
+import io.github.mam15mon.dsh.core.designsystem.SettingsRow
+import io.github.mam15mon.dsh.core.designsystem.Tag
+import io.github.mam15mon.dsh.core.designsystem.Tone
 import io.github.mam15mon.dsh.core.designsystem.elevated
 import io.github.mam15mon.dsh.core.designsystem.pressable
 import io.github.mam15mon.dsh.core.model.PermissionPreset
@@ -241,6 +249,11 @@ fun Composer(
     onReasoning: (String?) -> Unit = {},
     /** A line about the conversation's model shown above the editor (its own model is gone, #53); null = none. */
     modelNotice: String? = null,
+    rootEnabled: Boolean = false,
+    workspace: String = "",
+    projects: List<RootProject> = emptyList(),
+    onWorkspace: (String?) -> Unit = {},
+    onManageProjects: (() -> Unit)? = null,
 ) {
     val c = Dsh.colors
     val context = LocalContext.current
@@ -254,6 +267,7 @@ fun Composer(
     androidx.compose.runtime.LaunchedEffect(modelOpen) { if (!modelOpen) modelQuery = "" }
     var modeOpen by remember { mutableStateOf(false) }
     var confirmFull by remember { mutableStateOf(false) }
+    var workspaceOpen by remember { mutableStateOf(false) }
     val settled = rememberSettled()
     val focus = remember { androidx.compose.ui.focus.FocusRequester() }
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
@@ -354,6 +368,11 @@ fun Composer(
                         if (mode != null) MenuItem(stringResource(R.string.mode_menu_title), { close(); modeOpen = true }, ModeUi.icon(mode),
                             if (modeLocked) stringResource(R.string.mode_locked) else stringResource(R.string.mode_menu_hint))
                         MenuItem(stringResource(R.string.cmd_model), { close(); modelOpen = true }, R.drawable.dsw_data_outline, stringResource(R.string.cmd_model_desc))
+                        if (rootEnabled) {
+                            val currentLabel = if (workspace.isEmpty()) "应用私有目录"
+                                else projects.firstOrNull { it.path == workspace }?.name ?: workspace.substringAfterLast('/').ifEmpty { workspace }
+                            MenuItem("工作项目", { close(); workspaceOpen = true }, R.drawable.dsw_folder_open_outline, currentLabel)
+                        }
                     }
                     actions.onNewSession?.let { MenuItem(stringResource(R.string.new_session), { close(); it() }, R.drawable.dsw_new_chat_outline) }
                     actions.onTrajectory?.let { MenuItem(stringResource(R.string.view_trajectory), { close(); it() }, R.drawable.dsw_inspect_outline, stringResource(R.string.cmd_trajectory_desc)) }
@@ -449,6 +468,32 @@ fun Composer(
         stringResource(R.string.full_confirm_ok), stringResource(R.string.cancel),
         onConfirm = { confirmFull = false; onPreset(PermissionPreset.Full) }, onDismiss = { confirmFull = false },
     )
+    if (workspaceOpen && rootEnabled) DDialog(
+        { workspaceOpen = false },
+        title = "当前会话工作项目",
+        buttons = {
+            if (onManageProjects != null) DButton("管理项目", { workspaceOpen = false; onManageProjects() }, variant = BtnVariant.Outline, size = BtnSize.Sm)
+            DButton(stringResource(R.string.close), { workspaceOpen = false }, variant = BtnVariant.Outline, size = BtnSize.Sm)
+        },
+    ) {
+        Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+            SettingsRow(
+                title = "应用私有目录",
+                description = "不挂载外部项目，仅操作应用自己的 home 目录",
+                divider = false,
+                onClick = { workspaceOpen = false; onWorkspace("") },
+                trailing = if (workspace.isEmpty()) ({ Tag("当前", Tone.Success) }) else null,
+            )
+            projects.forEach { proj ->
+                SettingsRow(
+                    title = proj.name,
+                    description = proj.path,
+                    onClick = { workspaceOpen = false; onWorkspace(proj.path) },
+                    trailing = if (workspace == proj.path) ({ Tag("当前", Tone.Success) }) else null,
+                )
+            }
+        }
+    }
 }
 
 private fun effortDesc(e: Effort) = when (e) {
